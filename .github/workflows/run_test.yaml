@@ -1,0 +1,67 @@
+name: Run InspireCV@Generic Test
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false  # Allow other platforms to continue running even if one fails
+      matrix:
+        include:
+          # Ubuntu x86_64
+          - os: ubuntu-latest
+            arch: x86_64
+            install_cmd: |
+              sudo apt-get update
+              sudo apt-get install -y cmake g++ libeigen3-dev
+            build_dir: ubuntu_x86
+
+          # Ubuntu ARM64
+          - os: ubuntu-latest
+            arch: arm64
+            install_cmd: |
+              sudo apt-get update
+              sudo apt-get install -y cmake g++ libeigen3-dev
+              sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+            build_dir: ubuntu_arm64
+            runs_on: [self-hosted, linux, ARM64]  # You need to configure the ARM64 runner yourself
+
+          # macOS x86_64
+          - os: macos-latest
+            arch: x86_64
+            install_cmd: |
+              brew install cmake eigen
+            build_dir: macos_x86
+
+          # macOS ARM64 (M1/M2)
+          - os: macos-latest
+            arch: arm64
+            install_cmd: |
+              brew install cmake eigen
+            build_dir: macos_arm64
+            runs_on: [self-hosted, macOS, ARM64]  # You need to configure the M1/M2 runner
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: ${{ matrix.install_cmd }}
+
+      - name: Build project
+        run: bash command/build_run_test.sh ${{ matrix.build_dir }}
+
+      # Optional: Upload the build
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: inspire-cv-${{ matrix.os }}-${{ matrix.arch }}
+          path: ${{ matrix.build_dir }}/install

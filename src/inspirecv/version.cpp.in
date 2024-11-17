@@ -1,0 +1,11 @@
+#pragma once
+
+#include "inspirecv/version.h"
+
+namespace inspirecv {
+
+const char* GetVersion() {
+    return "@INSPIRECV_VERSION_STRING@";
+}
+
+}  // namespace inspirecv
