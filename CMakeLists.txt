@@ -9,6 +9,9 @@ project(InspireCV)
 # OKCV provides basic image processing capabilities with minimal dependencies.
 option(INSPIRECV_BACKEND_OPENCV "If you want to use OpenCV as the CV backend" OFF)
 
+# == Rockchip RGA Support ==
+option(INSPIRECV_BACKEND_RKRGA "Enable Rockchip RGA hardware acceleration" OFF)
+
 # == OKCV Backend Mode ==
 # OKCV Backend Mode:
 # When enabled, InspireCV will use its own lightweight OKCV backend implementation.
@@ -20,6 +23,7 @@ option(INSPIRECV_BACKEND_OPENCV "If you want to use OpenCV as the CV backend" OF
 option(INSPIRECV_BACKEND_OKCV_USE_OPENCV "Turn on some OpenCV api support inside OKCV" OFF)
 option(INSPIRECV_BACKEND_OKCV_USE_OPENCV_IO "Let okcv internally use OpenCV's image codec and read-write api." OFF)
 option(INSPIRECV_BACKEND_OKCV_USE_OPENCV_GUI "Make okcv internally dependent on some of OpenCV's curtain functions, like imshow." OFF)
+
 
 option(INSPIRECV_BUILD_OBJECT_LIBS "Build object libs" ON)
 option(INSPIRECV_BUILD_SHARED_LIBS "Build shared libraries" OFF)
@@ -38,11 +42,72 @@ add_compile_options(-fPIC)
 
 set(EIGEN3_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/Eigen-3.4.0-Headers")
 
+set(NEED_LINK_LIBS "")
+
+if(INSPIRECV_BACKEND_RKRGA)
+    # Set the Rockchip device type
+    set(ROCKCHIP_DEVICE "" CACHE STRING "Specify the Rockchip device (${ROCKCHIP_DEVICES_LIST})")
+    set_property(CACHE ROCKCHIP_DEVICE PROPERTY STRINGS ${ROCKCHIP_DEVICES_LIST})
+    
+    if(NOT ROCKCHIP_DEVICE)
+        message(FATAL_ERROR "ROCKCHIP_DEVICE must be specified when INSPIRECV_BACKEND_RKRGA is ON")
+    endif()
+
+    # When RGA is enabled, we must use OKCV backend, so we disable OpenCV backend!!
+    set(INSPIRECV_BACKEND_OPENCV OFF)
+
+    # Map device to architecture
+    if(ROCKCHIP_DEVICE STREQUAL "RV1106")
+        set(RGA_ARCH "armhf_uclibc")
+        add_definitions("-DINSPIRECV_RV1106_1103")
+    elseif(ROCKCHIP_DEVICE STREQUAL "RV1109")
+        set(RGA_ARCH "armhf")
+    elseif(ROCKCHIP_DEVICE STREQUAL "RK3566")
+        set(RGA_ARCH "aarch64")
+    else()
+        message(FATAL_ERROR "Unsupported ROCKCHIP_DEVICE: ${ROCKCHIP_DEVICE}")
+    endif()
+
+    # Set RGA paths
+    set(RGA_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/librga")
+    if(ANDROID)
+        if(RGA_ARCH STREQUAL "aarch64")
+            set(RGA_LIB_DIR "${RGA_ROOT_DIR}/Android/arm64-v8a")
+        else()
+            set(RGA_LIB_DIR "${RGA_ROOT_DIR}/Android/armeabi-v7a")
+        endif()
+    else()
+        set(RGA_LIB_DIR "${RGA_ROOT_DIR}/Linux/${RGA_ARCH}")
+    endif()
+
+    # Add RGA include and link directories
+    include_directories(${RGA_ROOT_DIR}/include)
+    message(STATUS "RGA_ROOT_DIR: ${RGA_ROOT_DIR}")
+    # set(NEED_LINK_LIBS ${NEED_LINK_LIBS} $<TARGET_OBJECTS:utils_obj>)
+    
+    # Add RGA static library to link libraries
+    set(NEED_LINK_LIBS ${NEED_LINK_LIBS} "${RGA_LIB_DIR}/librga.a")
+    
+    # Add compile definition
+    add_definitions("-DINSPIRECV_BACKEND_RKRGA")
+    add_definitions("-DROCKCHIP_DEVICE_${ROCKCHIP_DEVICE}")
+    
+    # Add RGA Utils
+    # include(${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/librga_utils/CMakeLists.txt)
+    # include_directories(${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/)
+    # include_directories(${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/librga_utils/allocator/include)
+
+    message(STATUS "RGA Support Enabled")
+    message(STATUS "Rockchip Device: ${ROCKCHIP_DEVICE}")
+    message(STATUS "RGA Architecture: ${RGA_ARCH}")
+    message(STATUS "RGA Library Path: ${RGA_LIB_DIR}")
+    message(STATUS "OpenCV Backend is disabled when RGA is enabled!")
+endif()
+
 if(INSPIRECV_BACKEND_OKCV_USE_OPENCV_IO OR INSPIRECV_BACKEND_OKCV_USE_OPENCV_GUI)
     set(INSPIRECV_BACKEND_OKCV_USE_OPENCV ON)
 endif()
 
-set(NEED_LINK_LIBS "")
 
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     set(CMAKE_BUILD_TYPE "Release")
@@ -67,6 +132,7 @@ if(INSPIRECV_BACKEND_OKCV_USE_OPENCV)
     set(NEED_LINK_LIBS ${NEED_LINK_LIBS} ${OpenCV_LIBS})
 
 endif()
+
 
 set(INSPIRECV_BACKEND "OKCV")
 if(INSPIRECV_BACKEND_OPENCV)
@@ -134,6 +200,12 @@ if(INSPIRECV_BACKEND STREQUAL "OKCV")
     set(INSPIRECV_SRC_FILES ${INSPIRECV_SRC_FILES} ${OKCV_SRC_FILES})
 endif()
 
+if(INSPIRECV_BACKEND_RKRGA)
+
+    set(OKCV_RGA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/inspirecv/okcv_rga)
+    file(GLOB_RECURSE OKCV_RGA_SRC_FILES "${OKCV_RGA_DIR}/*.cpp")
+    set(INSPIRECV_SRC_FILES ${INSPIRECV_SRC_FILES} ${OKCV_RGA_SRC_FILES})
+endif()
 
 set(INSPIRECV_SRC_FILES ${INSPIRECV_SRC_FILES} 
     ${INSPIRECV_SRC_DIR}/impl/point.cpp
@@ -156,6 +228,13 @@ if (INSPIRECV_BUILD_SAMPLE)
     target_link_libraries(sample_point ${NEED_LINK_LIBS} ${EXTENSION_LIBS})
     add_executable(sample_image ${CPP_DIR}/sample/sample_image.cpp ${INSPIRECV_SRC_FILES})
     target_link_libraries(sample_image ${NEED_LINK_LIBS} ${EXTENSION_LIBS})
+    if(INSPIRECV_BACKEND_RKRGA)    
+        # add_executable(sample_rga ${CPP_DIR}/sample/sample_rga.cpp ${INSPIRECV_SRC_FILES})
+        # target_link_libraries(sample_rga ${NEED_LINK_LIBS} ${EXTENSION_LIBS})
+        # add_executable(sample_rga_raw ${CPP_DIR}/sample/rga_raw.cpp ${INSPIRECV_SRC_FILES})
+        # target_link_libraries(sample_rga_raw ${NEED_LINK_LIBS} ${EXTENSION_LIBS})
+    endif()
+    
 endif()
 
 if (INSPIRECV_BUILD_TESTS)
