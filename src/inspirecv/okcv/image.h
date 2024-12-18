@@ -51,6 +51,15 @@ public:
     Image(Image &&image);
     Image &operator=(Image &&image);
 
+    // Add destructor or modify existing one
+    ~Image() {
+        if (is_external_) {
+            // Don't delete external data
+            data_.reset();
+            external_data_ = nullptr;
+        }
+    }
+
     inline bool Empty() const {
         return height_ == 0 || width_ == 0;
     }
@@ -67,7 +76,7 @@ public:
      * @param channels The number of channels in the image.
      * @param data The data for the image.
      */
-    void Reset(int width, int height, int channels, const D *data = nullptr);
+    void Reset(int width, int height, int channels, const D *data = nullptr, bool copy_data = true);
 
     /**
      * @brief Converts the image to a new data type.
@@ -175,8 +184,7 @@ public:
      * @param op The operation to apply.
      * @return The resulting image.
      */
-    Image<D> ElementWiseOperate(const Image<D> &image,
-                                    const std::function<D(D, D)> &op) const;
+    Image<D> ElementWiseOperate(const Image<D> &image, const std::function<D(D, D)> &op) const;
 
     /**
      * @brief Applies a pixel-wise operation to the image.
@@ -267,8 +275,8 @@ public:
      * @return The transformed image.
      */
     Image<D> AffineBilinear(int width, int height, const TransformMatrix &matrix,
-                                BorderMode border_mode = BORDER_MODE_CONSTANT,
-                                D border_value = 0) const;
+                            BorderMode border_mode = BORDER_MODE_CONSTANT,
+                            D border_value = 0) const;
 
     /**
      * @brief Applies an affine transformation to the image using bilinear interpolation.
@@ -280,8 +288,8 @@ public:
      * @return The transformed image.
      */
     Image<D> AffineBilinearReference(int width, int height, const TransformMatrix &matrix,
-                                         BorderMode border_mode = BORDER_MODE_CONSTANT,
-                                         D border_value = 0) const;
+                                     BorderMode border_mode = BORDER_MODE_CONSTANT,
+                                     D border_value = 0) const;
 
     /**
      * @brief Blurs the image using a Gaussian kernel.
@@ -298,8 +306,7 @@ public:
      * @param kernel_bottom The size of the kernel on the bottom.
      * @return The filtered image.
      */
-    Image<D> MinFilter(int kernel_left, int kernel_right, int kernel_top,
-                           int kernel_bottom) const;
+    Image<D> MinFilter(int kernel_left, int kernel_right, int kernel_top, int kernel_bottom) const;
 
     /**
      * @brief Applies a maximum filter to the image.
@@ -309,8 +316,7 @@ public:
      * @param kernel_bottom The size of the kernel on the bottom.
      * @return The filtered image.
      */
-    Image<D> MaxFilter(int kernel_left, int kernel_right, int kernel_top,
-                           int kernel_bottom) const;
+    Image<D> MaxFilter(int kernel_left, int kernel_right, int kernel_top, int kernel_bottom) const;
 
     /**
      * @brief Flips the image horizontally.
@@ -420,7 +426,7 @@ public:
      * @return The data pointer.
      */
     inline const D *Data() const {
-        return data_.get();
+        return is_external_ ? external_data_ : data_.get();
     }
 
     /**
@@ -428,7 +434,7 @@ public:
      * @return The data pointer.
      */
     inline D *Data() {
-        return data_.get();
+        return is_external_ ? const_cast<D *>(external_data_) : data_.get();
     }
 
     /**
@@ -526,9 +532,9 @@ protected:
      * @param y_lerp The y interpolation factor.
      * @return The interpolated pixel value.
      */
-    inline D InterpolateBilinear(const D top_left, const D top_right,
-                                     const D bottom_left, const D bottom_right,
-                                     const float x_lerp, const float y_lerp) const;
+    inline D InterpolateBilinear(const D top_left, const D top_right, const D bottom_left,
+                                 const D bottom_right, const float x_lerp,
+                                 const float y_lerp) const;
 
     /**
      * @brief Interpolates the image using bilinear interpolation.
@@ -553,17 +559,19 @@ protected:
      * @param out The output pixel value.
      */
     inline void OutInterpolateBilinearFloatx4x1Neon(
-      const D *top_left_0, const D *top_left_1, const D *top_left_2,
-      const D *top_left_3, const D *top_right_0, const D *top_righ_1,
-      const D *top_righ_2, const D *top_righ_3, const D *bottom_left_0,
-      const D *bottom_left_1, const D *bottom_left_2, const D *bottom_left_3,
-      const D *bottom_right_0, const D *bottom_right_1, const D *bottom_right_2,
-      const D *bottom_right_3, const float *x_lerp, const float *y_lerp, D *out) const;
+      const D *top_left_0, const D *top_left_1, const D *top_left_2, const D *top_left_3,
+      const D *top_right_0, const D *top_righ_1, const D *top_righ_2, const D *top_righ_3,
+      const D *bottom_left_0, const D *bottom_left_1, const D *bottom_left_2,
+      const D *bottom_left_3, const D *bottom_right_0, const D *bottom_right_1,
+      const D *bottom_right_2, const D *bottom_right_3, const float *x_lerp, const float *y_lerp,
+      D *out) const;
 
     int width_;
     int height_;
     int channels_;
     std::unique_ptr<D> data_;
+    const D *external_data_ = nullptr;  // Add this
+    bool is_external_ = false;          // Add this
 };
 
 }  // namespace okcv

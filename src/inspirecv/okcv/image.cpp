@@ -48,16 +48,30 @@ void Image<D>::Reset() {
 }
 
 template <typename D>
-void Image<D>::Reset(int width, int height, int channels, const D *data) {
-    int new_size = height * width * channels;
-    if (DataSize() != new_size) {
-        data_.reset(new D[new_size]);
-    }
-    height_ = height;
-    width_ = width;
-    channels_ = channels;
-    if (data != nullptr) {
-        std::memcpy(data_.get(), data, sizeof(D) * new_size);
+void Image<D>::Reset(int width, int height, int channels, const D *data, bool copy_data) {
+    if (data == nullptr || copy_data) {
+        // Original owned data path
+        int new_size = height * width * channels;
+        if (DataSize() != new_size) {
+            data_.reset(new D[new_size]);
+        }
+        height_ = height;
+        width_ = width;
+        channels_ = channels;
+        is_external_ = false;
+        external_data_ = nullptr;
+
+        if (data != nullptr) {
+            std::memcpy(data_.get(), data, sizeof(D) * new_size);
+        }
+    } else {
+        // External data path
+        data_.reset();  // Release any owned data
+        external_data_ = data;
+        is_external_ = true;
+        height_ = height;
+        width_ = width;
+        channels_ = channels;
     }
 }
 
@@ -177,7 +191,7 @@ Image<D> Image<D>::MulAdd(float a, float b) const {
 
 template <typename D>
 Image<D> Image<D>::ElementWiseOperate(const Image<D> &image,
-                                              const std::function<D(D, D)> &op) const {
+                                      const std::function<D(D, D)> &op) const {
     Image<D> res;
     INSPIRECV_CHECK(Width() == image.Width())
       << "width=" << Width() << ", image.width=" << image.Width();
@@ -311,8 +325,7 @@ Image<D> Image<D>::ResizeBilinear(int width, int height) const {
             for (int c = 0; c < channels_; ++c) {
                 *dst_iter++ = InterpolateBilinear(
                   at(in_y_low, in_x_low[x])[c], at(in_y_low, in_x_up[x])[c],
-                  at(in_y_up, in_x_low[x])[c], at(in_y_up, in_x_up[x])[c], lerp_x[x],
-                  lerp_y);
+                  at(in_y_up, in_x_low[x])[c], at(in_y_up, in_x_up[x])[c], lerp_x[x], lerp_y);
             }
         }
     }
@@ -344,7 +357,7 @@ Image<D> Image<D>::ResizeNearest(int width, int height) const {
 
 template <typename D>
 void Image<D>::CropAndResizeNearest(Image<D> &dst, const Rect<int> &rect, int resize_width,
-                                        int resize_height) const {
+                                    int resize_height) const {
     INSPIRECV_CHECK(this != &dst);
     INSPIRECV_CHECK(resize_height > 0 && resize_width > 0)
       << ", resize_height=" << resize_height << ", resize_width=" << resize_width;
@@ -365,7 +378,7 @@ void Image<D>::CropAndResizeNearest(Image<D> &dst, const Rect<int> &rect, int re
 
 template <typename D>
 void Image<D>::CropAndResizeBilinear(Image<D> &dst, const Rect<int> &rect, int resize_width,
-                                         int resize_height) const {
+                                     int resize_height) const {
     INSPIRECV_CHECK(this != &dst);
     INSPIRECV_CHECK(resize_height > 0 && resize_width > 0)
       << ", resize_height=" << resize_height << ", resize_width=" << resize_width;
@@ -395,8 +408,7 @@ void Image<D>::CropAndResizeBilinear(Image<D> &dst, const Rect<int> &rect, int r
             for (int c = 0; c < channels_; ++c) {
                 *(dst_iter++) = InterpolateBilinear(
                   at(in_y_low, in_x_low[x])[c], at(in_y_low, in_x_up[x])[c],
-                  at(in_y_up, in_x_low[x])[c], at(in_y_up, in_x_up[x])[c], lerp_x[x],
-                  lerp_y);
+                  at(in_y_up, in_x_low[x])[c], at(in_y_up, in_x_up[x])[c], lerp_x[x], lerp_y);
             }
         }
     }
@@ -404,7 +416,7 @@ void Image<D>::CropAndResizeBilinear(Image<D> &dst, const Rect<int> &rect, int r
 
 template <typename D>
 void Image<D>::GetTransformMatrix(int width, int height, const Rect<int> &rect,
-                                      TransformMatrix &matrix) const {
+                                  TransformMatrix &matrix) const {
     matrix[0] = static_cast<float>(rect.GetWidth()) / width;
     matrix[1] = 0;
     matrix[2] = rect.xmin();
@@ -414,10 +426,8 @@ void Image<D>::GetTransformMatrix(int width, int height, const Rect<int> &rect,
 }
 
 template <typename D>
-Image<D> Image<D>::AffineBilinearReference(int width, int height,
-                                                   const TransformMatrix &matrix,
-                                                   BorderMode border_mode,
-                                                   D border_value) const {
+Image<D> Image<D>::AffineBilinearReference(int width, int height, const TransformMatrix &matrix,
+                                           BorderMode border_mode, D border_value) const {
     Image<D> dst;
     dst.Reset(width, height, channels_);
     dst.Fill(0);
@@ -596,8 +606,7 @@ Image<float> Image<float>::AffineBilinear(int width, int height, const Transform
                                  affine_index_x[dst_y_tmp].src_up)[0],
                               at(affine_index_y[dst_x].src_up,
                                  affine_index_x[dst_y_tmp].src_low)[0],
-                              at(affine_index_y[dst_x].src_up,
-                                 affine_index_x[dst_y_tmp].src_up)[0],
+                              at(affine_index_y[dst_x].src_up, affine_index_x[dst_y_tmp].src_up)[0],
                               affine_index_x[dst_y_tmp].lerp, affine_index_y[dst_x].lerp);
                         }
                     }
@@ -632,8 +641,8 @@ Image<float> Image<float>::AffineBilinear(int width, int height, const Transform
                     bottom_left_3 = Data() + affine_index_local_y->src_up * width_ +
                                     (affine_index_local_x + 3)->src_low;
 
-                    bottom_right_0 = Data() + affine_index_local_y->src_up * width_ +
-                                     affine_index_local_x->src_up;
+                    bottom_right_0 =
+                      Data() + affine_index_local_y->src_up * width_ + affine_index_local_x->src_up;
                     bottom_right_1 = Data() + affine_index_local_y->src_up * width_ +
                                      (affine_index_local_x + 1)->src_up;
                     bottom_right_2 = Data() + affine_index_local_y->src_up * width_ +
@@ -666,8 +675,7 @@ Image<float> Image<float>::AffineBilinear(int width, int height, const Transform
 #endif
         for (; dst_y < height; ++dst_y) {
             for (int dst_x = 0; dst_x < width; dst_x++) {
-                if (affine_index_x[dst_y].src_low == -1 ||
-                    affine_index_y[dst_x].src_low == -1) {
+                if (affine_index_x[dst_y].src_low == -1 || affine_index_y[dst_x].src_low == -1) {
                     dst_iter[dst_y * width + dst_x] = border_value;
                 } else {
                     dst_iter[dst_y * width + dst_x] = InterpolateBilinear(
@@ -785,8 +793,7 @@ Image<float> Image<float>::AffineBilinear(int width, int height, const Transform
                                  affine_index_x[dst_x_tmp].src_up)[0],
                               at(affine_index_y[dst_y].src_up,
                                  affine_index_x[dst_x_tmp].src_low)[0],
-                              at(affine_index_y[dst_y].src_up,
-                                 affine_index_x[dst_x_tmp].src_up)[0],
+                              at(affine_index_y[dst_y].src_up, affine_index_x[dst_x_tmp].src_up)[0],
                               affine_index_x[dst_x_tmp].lerp, affine_index_y[dst_y].lerp);
                         }
                     }
@@ -818,8 +825,8 @@ Image<float> Image<float>::AffineBilinear(int width, int height, const Transform
                     bottom_left_3 = Data() + affine_index_y[dst_y].src_up * width_ +
                                     affine_index_x[dst_x + 3].src_low;
 
-                    bottom_right_0 = Data() + affine_index_y[dst_y].src_up * width_ +
-                                     affine_index_x[dst_x].src_up;
+                    bottom_right_0 =
+                      Data() + affine_index_y[dst_y].src_up * width_ + affine_index_x[dst_x].src_up;
                     bottom_right_1 = Data() + affine_index_y[dst_y].src_up * width_ +
                                      affine_index_x[dst_x + 1].src_up;
                     bottom_right_2 = Data() + affine_index_y[dst_y].src_up * width_ +
@@ -842,8 +849,7 @@ Image<float> Image<float>::AffineBilinear(int width, int height, const Transform
             }
 #endif
             for (; dst_x < width; dst_x++) {
-                if (affine_index_x[dst_x].src_low == -1 ||
-                    affine_index_y[dst_y].src_low == -1) {
+                if (affine_index_x[dst_x].src_low == -1 || affine_index_y[dst_y].src_low == -1) {
                     *(dst_iter++) = border_value;
                 } else {
                     *(dst_iter++) = InterpolateBilinear(
@@ -862,7 +868,7 @@ Image<float> Image<float>::AffineBilinear(int width, int height, const Transform
 
 template <typename D>
 Image<D> Image<D>::AffineBilinear(int width, int height, const TransformMatrix &matrix,
-                                          BorderMode border_mode, D border_value) const {
+                                  BorderMode border_mode, D border_value) const {
     return AffineBilinearReference(width, height, matrix, border_mode, border_value);
 }
 
@@ -1002,7 +1008,7 @@ Image<D> Image<D>::Blur(int kernel) const {
 
 template <typename D>
 Image<D> Image<D>::MinFilter(int kernel_left, int kernel_right, int kernel_top,
-                                     int kernel_bottom) const {
+                             int kernel_bottom) const {
     INSPIRECV_CHECK(Channels() == 1) << "channels=" << Channels();
     Image<D> tmp_image;
     if (kernel_left == 0 && kernel_right == 0) {
@@ -1046,7 +1052,7 @@ Image<D> Image<D>::MinFilter(int kernel_left, int kernel_right, int kernel_top,
 
 template <typename D>
 Image<D> Image<D>::MaxFilter(int kernel_left, int kernel_right, int kernel_top,
-                                     int kernel_bottom) const {
+                             int kernel_bottom) const {
     INSPIRECV_CHECK(Channels() == 1) << "channels=" << Channels();
     Image<D> tmp_image;
     if (kernel_left == 0 && kernel_right == 0) {
@@ -1235,8 +1241,7 @@ Status Image<D>::FillRect(const Rect2i &rect, const std::vector<D> &color) {
 }
 
 template <typename D>
-Status Image<D>::FillCircle(const Point2f &center, float radius,
-                                const std::vector<D> &color) {
+Status Image<D>::FillCircle(const Point2f &center, float radius, const std::vector<D> &color) {
     int top = std::ceil(std::max(0.f, center.y - radius));
     int bottom = std::min(height_ - 1.f, center.y + radius);
     for (int y = top; y <= bottom; ++y) {
@@ -1253,15 +1258,14 @@ Status Image<D>::FillCircle(const Point2f &center, float radius,
 }
 
 template <typename D>
-Status Image<D>::DrawPoint(const Point2f &point, float thinkness,
-                               const std::vector<D> &color) {
+Status Image<D>::DrawPoint(const Point2f &point, float thinkness, const std::vector<D> &color) {
     INSPIRECV_RETURN_IF_ERROR(FillCircle(point, thinkness, color));
     return Status::OK();
 }
 
 template <typename D>
 Status Image<D>::DrawLine(const Point2i &p0, const Point2i &p1, const std::vector<D> &color,
-                              int thickness) {
+                          int thickness) {
     if (p0 == p1) {
         return Status(error::INVALID_ARGUMENT, "Same points!");
     }
