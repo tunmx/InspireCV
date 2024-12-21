@@ -85,7 +85,7 @@ public:
             ss << "[Time(us) last:" << Get() << " ave:" << Average() << " min:" << Min()
                << " max:" << Max() << " count:" << Count() << " " << name_ << "]";
         } else {
-            ss << "No timer.";
+            ss << "Timer Disabled.";
         }
         return ss.str();
     }
