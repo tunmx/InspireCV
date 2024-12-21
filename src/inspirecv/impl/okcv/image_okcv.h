@@ -19,12 +19,14 @@ public:
 
     Impl() : image_() {}
 
-    Impl(int width, int height, int channels, const uint8_t* data = nullptr) {
-        image_.Reset(width, height, channels, data);
+    Impl(int width, int height, int channels, const uint8_t* data = nullptr,
+         bool copy_data = true) {
+        image_.Reset(width, height, channels, data, copy_data);
     }
 
-    void Reset(int width, int height, int channels, const uint8_t* data = nullptr) {
-        image_.Reset(width, height, channels, data);
+    void Reset(int width, int height, int channels, const uint8_t* data = nullptr,
+               bool copy_data = true) {
+        image_.Reset(width, height, channels, data, copy_data);
     }
 
     Image Clone() const {

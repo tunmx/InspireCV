@@ -20,8 +20,8 @@ Image::Image(Image&& other) noexcept = default;
 Image& Image::operator=(Image&& other) noexcept = default;
 
 // Construct image with given parameters
-Image::Image(int width, int height, int channels, const uint8_t* data) {
-    impl_ = std::make_unique<Impl>(width, height, channels, data);
+Image::Image(int width, int height, int channels, const uint8_t* data, bool copy_data) {
+    impl_ = std::make_unique<Impl>(width, height, channels, data, copy_data);
 }
 
 // Reset image
@@ -154,8 +154,8 @@ Image Image::ToGray() const {
     return impl_->ToGray();
 }
 
-Image Image::Create(int width, int height, int channels, const uint8_t* data) {
-    return Image(width, height, channels, data);
+Image Image::Create(int width, int height, int channels, const uint8_t* data, bool copy_data) {
+    return Image(width, height, channels, data, copy_data);
 }
 
 Image Image::Create() {

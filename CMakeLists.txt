@@ -156,6 +156,8 @@ if (INSPIRECV_BUILD_SAMPLE)
     target_link_libraries(sample_point ${NEED_LINK_LIBS} ${EXTENSION_LIBS})
     add_executable(sample_image ${CPP_DIR}/sample/sample_image.cpp ${INSPIRECV_SRC_FILES})
     target_link_libraries(sample_image ${NEED_LINK_LIBS} ${EXTENSION_LIBS})
+    add_executable(sample_image_mem ${CPP_DIR}/sample/sample_image_mem.cpp ${INSPIRECV_SRC_FILES})
+    target_link_libraries(sample_image_mem ${NEED_LINK_LIBS} ${EXTENSION_LIBS})
 endif()
 
 if (INSPIRECV_BUILD_TESTS)

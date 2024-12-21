@@ -46,9 +46,15 @@ public:
      * @param width Image width
      * @param height Image height
      * @param channels Number of color channels
+     * @param copy_data Whether to copy data, default is true. When set to false, the image will
+     * directly use the input data without copying. This is dangerous as the data lifetime must be
+     * managed externally and outlive the image. The data must also remain valid and unmodified for
+     * the entire lifetime of the image.
+     * Note: Zero-copy mode is currently only supported with OKCV backend.
      * @param data Optional pointer to image data
      */
-    Image(int width, int height, int channels, const uint8_t* data = nullptr);
+    Image(int width, int height, int channels, const uint8_t* data = nullptr,
+          bool copy_data = true);
 
     /**
      * @brief Reset image with new dimensions and data
@@ -279,9 +285,15 @@ public:
      * @param height Image height
      * @param channels Number of channels
      * @param data Optional image data
+     * @param copy_data Whether to copy data, default is true. When set to false, the image will
+     * directly use the input data without copying. This is dangerous as the data lifetime must be
+     * managed externally and outlive the image. The data must also remain valid and unmodified for
+     * the entire lifetime of the image.
+     * Note: Zero-copy mode is currently only supported with OKCV backend.
      * @return New image
      */
-    static Image Create(int width, int height, int channels, const uint8_t* data = nullptr);
+    static Image Create(int width, int height, int channels, const uint8_t* data = nullptr,
+                        bool copy_data = true);
 
     /**
      * @brief Create empty image
