@@ -127,7 +127,7 @@ public:
      * @param window_name Name of display window
      * @param delay Wait time in milliseconds (0 = wait forever)
      */
-    void Show(const std::string& window_name = "win", int delay = 0) const;
+    void Show(const std::string& window_name = std::string("win"), int delay = 0) const;
 
     /**
      * @brief Fill entire image with value
