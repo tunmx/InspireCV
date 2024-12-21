@@ -14,14 +14,18 @@ public:
     // Creation and conversion
     Impl(const cv::Mat& mat) : image_(std::move(mat)) {}
 
-    Impl(int width, int height, int channels, const uint8_t* data = nullptr) {
+    // copy_data is ignored
+    Impl(int width, int height, int channels, const uint8_t* data = nullptr,
+         bool copy_data = true) {
         image_.create(height, width, CV_8UC(channels));
         if (data) {
             std::memcpy(image_.data, data, width * height * channels);
         }
     }
 
-    void Reset(int width, int height, int channels, const uint8_t* data = nullptr) {
+    // copy_data is ignored
+    void Reset(int width, int height, int channels, const uint8_t* data = nullptr,
+               bool copy_data = true) {
         image_.create(height, width, CV_8UC(channels));
         if (data) {
             std::memcpy(image_.data, data, width * height * channels);

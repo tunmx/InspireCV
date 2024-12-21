@@ -5,7 +5,7 @@
 namespace inspirecv {
 
 const char* GetVersion() {
-    return "InspireCV v0.4.2@General - Build Time: 2024-11-17";
+    return "InspireCV v0.5.0@General - Build Time: 2024-12-22";
 }
 
 }  // namespace inspirecv

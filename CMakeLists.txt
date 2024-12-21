@@ -79,8 +79,8 @@ endif()
 
 # Add version information
 set(INSPIRECV_VERSION_MAJOR 0)
-set(INSPIRECV_VERSION_MINOR 4)
-set(INSPIRECV_VERSION_PATCH 2)
+set(INSPIRECV_VERSION_MINOR 5)
+set(INSPIRECV_VERSION_PATCH 0)
 string(TIMESTAMP BUILD_TIMESTAMP "%Y-%m-%d")
 
 set(VERSION_SUFFIX "")
@@ -156,6 +156,8 @@ if (INSPIRECV_BUILD_SAMPLE)
     target_link_libraries(sample_point ${NEED_LINK_LIBS} ${EXTENSION_LIBS})
     add_executable(sample_image ${CPP_DIR}/sample/sample_image.cpp ${INSPIRECV_SRC_FILES})
     target_link_libraries(sample_image ${NEED_LINK_LIBS} ${EXTENSION_LIBS})
+    add_executable(sample_image_mem ${CPP_DIR}/sample/sample_image_mem.cpp ${INSPIRECV_SRC_FILES})
+    target_link_libraries(sample_image_mem ${NEED_LINK_LIBS} ${EXTENSION_LIBS})
 endif()
 
 if (INSPIRECV_BUILD_TESTS)
