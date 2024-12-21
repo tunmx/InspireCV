@@ -2,6 +2,7 @@
 #define INSPIRECV_IMAGE_H
 
 #include <memory>
+#include <string>
 #include "define.h"
 #include "rect.h"
 #include "point.h"
