@@ -2,6 +2,7 @@
 #ifndef INSPIRECV_TIME_SPEND_H_
 #define INSPIRECV_TIME_SPEND_H_
 
+#include <cstdint>
 #include <algorithm>
 #include <ostream>
 #include <sstream>
