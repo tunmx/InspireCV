@@ -17,3 +17,4 @@ local_build/*
 build_*/
 build/
 .DS_Store
+version.cpp

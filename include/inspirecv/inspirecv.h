@@ -12,5 +12,6 @@
 #include "core/size.h"
 #include "core/transform_matrix.h"
 #include "core/image.h"
+#include "core/color.h"
 
 #endif  // INSPIRECV_INSPIRECV_H
