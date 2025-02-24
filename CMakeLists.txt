@@ -23,8 +23,8 @@ option(INSPIRECV_BACKEND_OKCV_USE_OPENCV_GUI "Make okcv internally dependent on 
 
 option(INSPIRECV_BUILD_OBJECT_LIBS "Build object libs" ON)
 option(INSPIRECV_BUILD_SHARED_LIBS "Build shared libraries" OFF)
-option(INSPIRECV_BUILD_TESTS "Build tests" ON)
-option(INSPIRECV_BUILD_SAMPLE "Build sample" ON)
+option(INSPIRECV_BUILD_TESTS "Build tests" OFF)
+option(INSPIRECV_BUILD_SAMPLE "Build sample" OFF)
 
 option(INSPIRECV_EXPANSION_MODULE_TEST_MNN_IMGPROCESS "Optionally enable MNN image processing module test" OFF)
 
@@ -163,8 +163,8 @@ endif()
 if (INSPIRECV_BUILD_TESTS)
     include_directories("${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/Catch2/single_include")
     file(GLOB_RECURSE TEST_CASE_FILES "${CPP_DIR}/test/cases/*.cpp")
-    add_executable(test ${CPP_DIR}/test/test.cpp ${TEST_CASE_FILES} ${INSPIRECV_SRC_FILES} )
-    target_link_libraries(test ${NEED_LINK_LIBS} ${EXTENSION_LIBS})
+    add_executable("testing" ${CPP_DIR}/test/test.cpp ${TEST_CASE_FILES} ${INSPIRECV_SRC_FILES} )
+    target_link_libraries("testing" ${NEED_LINK_LIBS} ${EXTENSION_LIBS})
 endif()
 
 if(INSPIRECV_BUILD_OBJECT_LIBS)
@@ -214,5 +214,5 @@ install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/inspirecv DESTINATION include)
 
 
 if(INSPIRECV_BUILD_TESTS)
-    install(TARGETS "test" RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
+    install(TARGETS "testing" RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
 endif()

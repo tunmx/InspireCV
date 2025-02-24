@@ -13,7 +13,7 @@ cd "$BUILD_DIR" || { echo "Failed to change to directory: $BUILD_DIR"; exit 1; }
 
 # Configure CMake in Release mode
 echo "Configuring CMake..."
-cmake -DCMAKE_BUILD_TYPE=Release .. || { echo "CMake configuration failed"; exit 1; }
+cmake -DCMAKE_BUILD_TYPE=Release -DINSPIRECV_BUILD_TESTS=ON .. || { echo "CMake configuration failed"; exit 1; }
 
 # Build using all available cores
 echo "Building..."
@@ -29,6 +29,6 @@ cd install/bin || { echo "Failed to change to install/bin directory"; exit 1; }
 
 # Run tests
 echo "Running tests..."
-./test || { echo "Tests failed"; exit 1; }
+./testing || { echo "Tests failed"; exit 1; }
 
 echo "Build and test process completed successfully in directory: $BUILD_DIR"
