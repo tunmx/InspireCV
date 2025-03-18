@@ -2,7 +2,7 @@
 #define OKCV_GEOM_POINT_H_
 
 #include <okcv/geometry/geom_common.h>
-#include <okcv/geometry/transform_matrix.h>
+#include <okcv/geometry/cv_transform_matrix.h>
 #include <vector>
 
 namespace okcv {

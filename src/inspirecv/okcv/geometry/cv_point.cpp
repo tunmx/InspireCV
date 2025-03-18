@@ -1,4 +1,4 @@
-#include "point.h"
+#include "cv_point.h"
 #include "check.h"
 
 namespace okcv {

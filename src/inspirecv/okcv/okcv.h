@@ -3,6 +3,6 @@
 
 #include <okcv/base/base.h>
 #include <okcv/geometry/geom.h>
-#include <okcv/image.h>
+#include <okcv/image_bmp.h>
 
 #endif  // OKCV_OKCV_H_

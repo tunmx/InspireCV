@@ -2,10 +2,10 @@
 #define OKCV_GEOM_RECT_H_
 
 #include <okcv/geometry/geom_common.h>
-#include <okcv/geometry/point.h>
-#include <okcv/geometry/transform_matrix.h>
-#include <okcv/geometry/size.h>
-#include <okcv/geometry/point.h>
+#include <okcv/geometry/cv_point.h>
+#include <okcv/geometry/cv_transform_matrix.h>
+#include <okcv/geometry/cv_size.h>
+#include <okcv/geometry/cv_point.h>
 
 namespace okcv {
 

@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <vector>
 
-#include "image.h"
+#include "image_bmp.h"
 #include "check.h"
 
 #ifndef INSPIRECV_BACKEND_OKCV_USE_OPENCV_IO
