@@ -1,4 +1,3 @@
-
 #ifndef INSPIRECV_TIME_SPEND_H_
 #define INSPIRECV_TIME_SPEND_H_
 
@@ -83,7 +82,7 @@ public:
     std::string Report() const {
         std::stringstream ss;
         if (is_enable) {
-            ss << "[Time(us) last:" << Get() << " ave:" << Average() << " min:" << Min()
+            ss << "[Time(us) total:" << Total() << " ave:" << Average() << " min:" << Min()
                << " max:" << Max() << " count:" << Count() << " " << name_ << "]";
         } else {
             ss << "Timer Disabled.";
