@@ -13,7 +13,7 @@
 namespace inspirecv {
 
 // Get the current time in microseconds.
-uint64_t _now();
+uint64_t INSPIRECV_API _now();
 
 /**
  * @brief A class to measure the cost of a block of code.
@@ -107,10 +107,10 @@ protected:
     static int is_enable;
 };
 
-std::ostream &operator<<(std::ostream &os, const TimeSpend &timer);
+INSPIRECV_API std::ostream &operator<<(std::ostream &os, const TimeSpend &timer);
 
 }  // namespace inspirecv
 
-#define TIME_NOW inspirecv::NowMicros()
+#define TIME_NOW inspirecv::_now()
 
 #endif  // INSPIRECV_TIME_SPEND_H_
