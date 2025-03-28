@@ -35,6 +35,13 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
 set(CMAKE_CXX_STANDARD 14)
 add_compile_options(-fPIC)
 
+if(WIN32)
+  if(INSPIRECV_BUILD_SHARED_LIBS)
+    add_definitions(-DINSPIRECV_API=__declspec\(dllexport\))
+  endif()
+else()
+  add_definitions(-DINSPIRECV_API=__attribute__\(\(visibility\(\"default\"\)\)\))
+endif()
 
 set(EIGEN3_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/Eigen-3.4.0-Headers")
 
