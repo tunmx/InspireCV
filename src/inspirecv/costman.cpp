@@ -11,7 +11,7 @@ namespace inspirecv {
 
 #if defined(_MSC_VER)
 
-uint64_t _now() {
+uint64_t INSPIRECV_API _now() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
              std::chrono::system_clock::now().time_since_epoch())
       .count();
@@ -19,7 +19,7 @@ uint64_t _now() {
 
 #else
 
-uint64_t _now() {
+uint64_t INSPIRECV_API _now() {
     struct timeval tv;
     gettimeofday(&tv, nullptr);
     return static_cast<uint64_t>(tv.tv_sec) * 1000000 + tv.tv_usec;
@@ -29,7 +29,7 @@ uint64_t _now() {
 
 int TimeSpend::is_enable = true;
 
-std::ostream &operator<<(std::ostream &os, const TimeSpend &timer) {
+std::ostream &INSPIRECV_API operator<<(std::ostream &os, const TimeSpend &timer) {
     os << timer.Report();
     return os;
 }
