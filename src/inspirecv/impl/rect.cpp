@@ -224,6 +224,10 @@ Rect<T> ApplyTransformToRect(const Rect<T> &rect, const TransformMatrix &transfo
     return MinBoundingRect(transformed_vertices);
 }
 
+template Rect<int> MinBoundingRect(const std::vector<Point<int>> &points);
+template Rect<float> MinBoundingRect(const std::vector<Point<float>> &points);
+template Rect<double> MinBoundingRect(const std::vector<Point<double>> &points);
+
 template Rect<int> ApplyTransformToRect(const Rect<int> &rect, const TransformMatrix &transform);
 template Rect<float> ApplyTransformToRect(const Rect<float> &rect,
                                           const TransformMatrix &transform);
