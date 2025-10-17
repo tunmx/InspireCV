@@ -166,7 +166,7 @@ public:
     // Image processing
     Image GaussianBlur(int kernel_size, double sigma) const {
         Image result;
-        result.impl_->image_ = image_.Blur(kernel_size);
+        result.impl_->image_ = image_.GaussianBlur(kernel_size, static_cast<float>(sigma));
         return result;
     }
 

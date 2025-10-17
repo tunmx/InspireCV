@@ -104,6 +104,12 @@ endif()
 set(INSPIRECV_VERSION_STRING 
     "InspireCV v${INSPIRECV_VERSION_MAJOR}.${INSPIRECV_VERSION_MINOR}.${INSPIRECV_VERSION_PATCH}${VERSION_SUFFIX} - Build Time: ${BUILD_TIMESTAMP}")
 
+set(INSPIRECV_BACKEND_STRING "")
+if(INSPIRECV_BACKEND STREQUAL "OpenCV")
+    set(INSPIRECV_BACKEND_STRING "OpenCV")
+else()
+    set(INSPIRECV_BACKEND_STRING "OKCV")
+endif()
 
 set(EXTENSION_LIBS "")
 if(INSPIRECV_EXPANSION_MODULE_TEST_MNN_IMGPROCESS)
@@ -165,6 +171,8 @@ if (INSPIRECV_BUILD_SAMPLE)
     target_link_libraries(sample_image ${NEED_LINK_LIBS} ${EXTENSION_LIBS})
     add_executable(sample_image_mem ${CPP_DIR}/sample/sample_image_mem.cpp ${INSPIRECV_SRC_FILES})
     target_link_libraries(sample_image_mem ${NEED_LINK_LIBS} ${EXTENSION_LIBS})
+    add_executable(sample_gauss_blur ${CPP_DIR}/sample/sample_gauss_blur.cpp ${INSPIRECV_SRC_FILES})
+    target_link_libraries(sample_gauss_blur ${NEED_LINK_LIBS} ${EXTENSION_LIBS})
 endif()
 
 if (INSPIRECV_BUILD_TESTS)

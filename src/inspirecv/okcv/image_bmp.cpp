@@ -6,6 +6,9 @@
 #include <sstream>
 #include <algorithm>
 #include <vector>
+#include <limits>
+#include <type_traits>
+#include <thread>
 
 #include "image_bmp.h"
 #include "check.h"
@@ -1004,6 +1007,128 @@ Image<D> Image<D>::Blur(int kernel) const {
             }
     }
     return res;
+}
+
+template <typename D>
+Image<D> Image<D>::GaussianBlur(int ksize, float sigmaX) const {
+    if (ksize <= 1)
+        return Clone();
+    if ((ksize & 1) == 0)
+        ++ksize;  // enforce odd
+
+    if (sigmaX <= 0.f) {
+        // OpenCV-compatible heuristic for sigma from kernel size
+        float half = 0.5f * (ksize - 1);
+        sigmaX = 0.3f * (half - 1.f) + 0.8f;
+        if (sigmaX <= 0.f)
+            sigmaX = 0.8f;
+    }
+
+    const int radius = ksize / 2;
+
+    // Build 1D Gaussian kernel
+    std::vector<float> kernel(ksize);
+    const float inv2Sigma2 = 1.0f / (2.0f * sigmaX * sigmaX);
+    float sumw = 0.f;
+    for (int i = -radius; i <= radius; ++i) {
+        float w = std::exp(-(i * i) * inv2Sigma2);
+        kernel[i + radius] = w;
+        sumw += w;
+    }
+    const float invSum = 1.0f / sumw;
+    for (int i = 0; i < ksize; ++i) kernel[i] *= invSum;
+
+    // Temporary buffer for horizontal pass (float for precision)
+    std::vector<float> tmp(static_cast<size_t>(width_) * height_ * channels_);
+
+    // Precompute clamped index tables to remove inner clamps
+    std::vector<int> horizIndices(static_cast<size_t>(width_) * ksize);
+    for (int x = 0; x < width_; ++x) {
+        for (int k = -radius; k <= radius; ++k) {
+            int idx = x + k;
+            if (idx < 0) idx = 0; else if (idx >= width_) idx = width_ - 1;
+            horizIndices[static_cast<size_t>(x) * ksize + (k + radius)] = idx;
+        }
+    }
+    std::vector<int> vertIndices(static_cast<size_t>(height_) * ksize);
+    for (int y = 0; y < height_; ++y) {
+        for (int k = -radius; k <= radius; ++k) {
+            int idy = y + k;
+            if (idy < 0) idy = 0; else if (idy >= height_) idy = height_ - 1;
+            vertIndices[static_cast<size_t>(y) * ksize + (k + radius)] = idy;
+        }
+    }
+
+    // Parallel setup
+    unsigned int hw = std::thread::hardware_concurrency();
+    if (hw == 0) hw = 4;
+    unsigned int numWorkers = std::min<unsigned int>(hw, static_cast<unsigned int>(height_));
+    auto parallelForRows = [&](int rows, const std::function<void(int,int)> &fn) {
+        if (numWorkers <= 1 || rows < 2) {
+            fn(0, rows);
+            return;
+        }
+        std::vector<std::thread> workers;
+        workers.reserve(numWorkers);
+        int chunk = (rows + static_cast<int>(numWorkers) - 1) / static_cast<int>(numWorkers);
+        int start = 0;
+        for (unsigned int t = 0; t < numWorkers && start < rows; ++t) {
+            int end = std::min(start + chunk, rows);
+            workers.emplace_back([=,&fn]() { fn(start, end); });
+            start = end;
+        }
+        for (auto &th : workers) th.join();
+    };
+
+    // Horizontal pass (row-parallel)
+    parallelForRows(height_, [&](int yBegin, int yEnd) {
+        for (int y = yBegin; y < yEnd; ++y) {
+            const D* rowPtr = Row(y);
+            for (int x = 0; x < width_; ++x) {
+                const int* xIdx = &horizIndices[static_cast<size_t>(x) * ksize];
+                size_t base = (static_cast<size_t>(y) * width_ + x) * channels_;
+                for (int c = 0; c < channels_; ++c) {
+                    float acc = 0.f;
+                    for (int k = 0; k < ksize; ++k) {
+                        int xx = xIdx[k];
+                        acc += static_cast<float>(rowPtr[xx * channels_ + c]) * kernel[k];
+                    }
+                    tmp[base + c] = acc;
+                }
+            }
+        }
+    });
+
+    // Vertical pass -> output (row-parallel)
+    Image<D> dst;
+    dst.Reset(width_, height_, channels_);
+    D* dst_data = dst.Data();
+
+    // Precompute numeric limits for saturation
+    const float lo = static_cast<float>(std::numeric_limits<D>::lowest());
+    const float hi = static_cast<float>(std::numeric_limits<D>::max());
+
+    parallelForRows(height_, [&](int yBegin, int yEnd) {
+        for (int y = yBegin; y < yEnd; ++y) {
+            const int* yIdx = &vertIndices[static_cast<size_t>(y) * ksize];
+            for (int x = 0; x < width_; ++x) {
+                size_t baseOut = (static_cast<size_t>(y) * width_ + x) * channels_;
+                for (int c = 0; c < channels_; ++c) {
+                    float acc = 0.f;
+                    for (int k = 0; k < ksize; ++k) {
+                        int yy = yIdx[k];
+                        size_t baseIn = (static_cast<size_t>(yy) * width_ + x) * channels_ + c;
+                        acc += tmp[baseIn] * kernel[k];
+                    }
+                    if (std::is_integral<D>::value) acc = std::floor(acc + 0.5f);
+                    acc = acc < lo ? lo : (acc > hi ? hi : acc);
+                    dst_data[baseOut + c] = static_cast<D>(acc);
+                }
+            }
+        }
+    });
+
+    return dst;
 }
 
 template <typename D>
