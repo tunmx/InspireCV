@@ -272,12 +272,127 @@ public:
         return result;
     }
 
+    Image Erode(int kernel_size, int iterations) const {
+        Image result;
+        if ((kernel_size & 1) == 0) ++kernel_size;
+        cv::Mat element = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(kernel_size, kernel_size));
+        cv::erode(image_, result.impl_->image_, element, cv::Point(-1,-1), std::max(1, iterations));
+        return result;
+    }
+
+    Image Dilate(int kernel_size, int iterations) const {
+        Image result;
+        if ((kernel_size & 1) == 0) ++kernel_size;
+        cv::Mat element = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(kernel_size, kernel_size));
+        cv::dilate(image_, result.impl_->image_, element, cv::Point(-1,-1), std::max(1, iterations));
+        return result;
+    }
+
     Image Threshold(double thresh, double maxval, int type) const {
         Image result;
         cv::Mat result_mat;
         cv::threshold(image_, result_mat, thresh, maxval, type);
         result.impl_->image_ = result_mat;
         return result;
+    }
+
+    Image AbsDiff(const Image::Impl& other) const {
+        Image result;
+        cv::absdiff(image_, other.image_, result.impl_->image_);
+        return result;
+    }
+
+    Image MeanChannels() const {
+        if (image_.channels() == 1) return Clone();
+        Image result;
+        std::vector<cv::Mat> ch;
+        cv::split(image_, ch);
+        CV_Assert(!ch.empty());
+        cv::Mat acc;
+        ch[0].convertTo(acc, CV_32F);
+        for (size_t i = 1; i < ch.size(); ++i) {
+            cv::Mat tmp;
+            ch[i].convertTo(tmp, CV_32F);
+            acc += tmp;
+        }
+        acc *= (1.0f / static_cast<float>(ch.size()));
+        acc.convertTo(result.impl_->image_, CV_8U);
+        return result;
+    }
+
+    Image Blend(const Image::Impl& other, const Image::Impl& mask) const {
+        Image result;
+        // Ensure same size/channels between A and B
+        CV_Assert(image_.size() == other.image_.size());
+        CV_Assert(image_.channels() == other.image_.channels());
+        const int cn = image_.channels();
+
+        // Ensure 8U buffers
+        cv::Mat A, B;
+        if (image_.depth() != CV_8U) image_.convertTo(A, CV_8U); else A = image_;
+        if (other.image_.depth() != CV_8U) other.image_.convertTo(B, CV_8U); else B = other.image_;
+        if (A.channels() == 1 && cn == 3) cv::cvtColor(A, A, cv::COLOR_GRAY2BGR);
+        if (B.channels() == 1 && cn == 3) cv::cvtColor(B, B, cv::COLOR_GRAY2BGR);
+
+        // Single-channel 8U mask
+        cv::Mat M1;
+        if (mask.image_.channels() == 1) M1 = mask.image_;
+        else cv::cvtColor(mask.image_, M1, cv::COLOR_BGR2GRAY);
+
+#if 1
+        // Reference per-pixel integer implementation (correct but less optimal)
+        result.impl_->image_.create(A.rows, A.cols, A.type());
+        const int width = A.cols;
+        const int height = A.rows;
+        for (int y = 0; y < height; ++y) {
+            const uchar* pa = A.ptr<uchar>(y);
+            const uchar* pb = B.ptr<uchar>(y);
+            const uchar* pm = M1.ptr<uchar>(y);
+            uchar* po = result.impl_->image_.ptr<uchar>(y);
+            for (int x = 0; x < width; ++x) {
+                int m = pm[x];
+                int inv = 255 - m;
+                if (cn == 1) {
+                    int a0 = pa[x];
+                    int b0 = pb[x];
+                    int out0 = (m * a0 + inv * b0 + 127) / 255;
+                    po[x] = static_cast<uchar>(out0);
+                } else {
+                    int idx = x * 3;
+                    for (int c = 0; c < 3; ++c) {
+                        int a0 = pa[idx + c];
+                        int b0 = pb[idx + c];
+                        int out0 = (m * a0 + inv * b0 + 127) / 255;
+                        po[idx + c] = static_cast<uchar>(out0);
+                    }
+                }
+            }
+        }
+        return result;
+#else
+        // Optimized vectorized path using OpenCV arithmetics in 16U
+        cv::Mat A16, B16, M16;
+        A.convertTo(A16, CV_16U);
+        B.convertTo(B16, CV_16U);
+        M1.convertTo(M16, CV_16U);
+
+        cv::Mat Mx; // replicate mask to match channels when needed
+        if (cn == 3) {
+            cv::merge(std::vector<cv::Mat>{M16, M16, M16}, Mx);
+        } else {
+            Mx = M16;
+        }
+
+        cv::Mat inv; cv::subtract(cv::Scalar::all(255), Mx, inv, cv::noArray(), CV_16U);
+        cv::Mat p1, p2, sum;
+        cv::multiply(Mx, A16, p1);     // M*A
+        cv::multiply(inv, B16, p2);    // (255-M)*B
+        cv::add(p1, p2, sum);          // sum
+        cv::add(sum, cv::Scalar::all(127), sum); // rounding
+        cv::Mat out16; cv::divide(sum, 255, out16, 1, CV_16U);
+        out16.convertTo(result.impl_->image_, CV_8U);
+        return result;
+#endif
     }
 
     explicit Impl(void* internal_data) {

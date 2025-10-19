@@ -146,12 +146,32 @@ Image Image::GaussianBlur(int kernel_size, double sigma) const {
     return impl_->GaussianBlur(kernel_size, sigma);
 }
 
+Image Image::Erode(int kernel_size, int iterations) const {
+    return impl_->Erode(kernel_size, iterations);
+}
+
+Image Image::Dilate(int kernel_size, int iterations) const {
+    return impl_->Dilate(kernel_size, iterations);
+}
+
 Image Image::Threshold(double thresh, double maxval, int type) const {
     return impl_->Threshold(thresh, maxval, type);
 }
 
 Image Image::ToGray() const {
     return impl_->ToGray();
+}
+
+Image Image::AbsDiff(const Image& other) const {
+    return impl_->AbsDiff(*other.impl_);
+}
+
+Image Image::MeanChannels() const {
+    return impl_->MeanChannels();
+}
+
+Image Image::Blend(const Image& other, const Image& mask) const {
+    return impl_->Blend(*other.impl_, *mask.impl_);
 }
 
 Image Image::Create(int width, int height, int channels, const uint8_t* data, bool copy_data) {
