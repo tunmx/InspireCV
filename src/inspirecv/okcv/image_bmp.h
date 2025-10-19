@@ -299,6 +299,14 @@ public:
     Image<D> Blur(int kernel) const;
 
     /**
+     * @brief Applies Gaussian blur with kernel size and sigma.
+     * @param ksize Kernel size (odd, >=1). If <=1 returns clone.
+     * @param sigmaX Gaussian sigma in X (and Y). If <=0, computed from ksize.
+     * @return The blurred image.
+     */
+    Image<D> GaussianBlur(int ksize, float sigmaX) const;
+
+    /**
      * @brief Applies a minimum filter to the image.
      * @param kernel_left The size of the kernel on the left.
      * @param kernel_right The size of the kernel on the right.

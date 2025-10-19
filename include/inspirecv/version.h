@@ -9,6 +9,8 @@ namespace inspirecv {
 
 const char* INSPIRECV_API GetVersion();
 
+const char* INSPIRECV_API GetCVBackend();
+
 }  // namespace inspirecv
 
 #endif  // INSPIRECV_VERSION_H

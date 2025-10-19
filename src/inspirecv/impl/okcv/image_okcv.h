@@ -166,14 +166,110 @@ public:
     // Image processing
     Image GaussianBlur(int kernel_size, double sigma) const {
         Image result;
-        result.impl_->image_ = image_.Blur(kernel_size);
+        result.impl_->image_ = image_.GaussianBlur(kernel_size, static_cast<float>(sigma));
+        return result;
+    }
+
+    Image Erode(int kernel_size, int iterations) const {
+        INSPIRECV_CHECK(image_.Channels() == 1) << "Erode only supports single-channel";
+        int left = kernel_size / 2;
+        int right = kernel_size - left - 1;
+        int top = kernel_size / 2;
+        int bottom = kernel_size - top - 1;
+        Image result;
+        okcv::Image<uint8_t> cur = image_.Clone();
+        for (int it = 0; it < std::max(1, iterations); ++it) {
+            okcv::Image<uint8_t> tmp = cur.MinFilter(left, right, top, bottom);
+            cur = std::move(tmp);
+        }
+        result.impl_->image_ = std::move(cur);
+        return result;
+    }
+
+    Image Dilate(int kernel_size, int iterations) const {
+        INSPIRECV_CHECK(image_.Channels() == 1) << "Dilate only supports single-channel";
+        int left = kernel_size / 2;
+        int right = kernel_size - left - 1;
+        int top = kernel_size / 2;
+        int bottom = kernel_size - top - 1;
+        Image result;
+        okcv::Image<uint8_t> cur = image_.Clone();
+        for (int it = 0; it < std::max(1, iterations); ++it) {
+            okcv::Image<uint8_t> tmp = cur.MaxFilter(left, right, top, bottom);
+            cur = std::move(tmp);
+        }
+        result.impl_->image_ = std::move(cur);
         return result;
     }
 
     Image Threshold(double thresh, double maxval, int type) const {
-        // TODO: Implement when OKCV adds threshold
-        INSPIRECV_LOG(WARN) << "Threshold is not implemented in OKCV";
-        return Clone();
+        // Support binary only: type==0 -> THRESH_BINARY
+        INSPIRECV_CHECK(image_.Channels() == 1);
+        Image result;
+        result.impl_->image_.Reset(image_.Width(), image_.Height(), 1);
+        const uint8_t* src = image_.Data();
+        uint8_t* dst = result.impl_->image_.Data();
+        const int total = image_.DataSize();
+        const uint8_t t = static_cast<uint8_t>(thresh);
+        const uint8_t mv = static_cast<uint8_t>(maxval);
+        for (int i = 0; i < total; ++i) dst[i] = src[i] >= t ? mv : 0;
+        return result;
+    }
+
+    Image AbsDiff(const Image::Impl& other) const {
+        INSPIRECV_CHECK(image_.Width() == other.Width() && image_.Height() == other.Height() &&
+                        image_.Channels() == other.Channels());
+        Image result;
+        result.impl_->image_.Reset(image_.Width(), image_.Height(), image_.Channels());
+        const uint8_t* a = image_.Data();
+        const uint8_t* b = other.image_.Data();
+        uint8_t* d = result.impl_->image_.Data();
+        const int n = image_.DataSize();
+        for (int i = 0; i < n; ++i) d[i] = static_cast<uint8_t>(std::abs(int(a[i]) - int(b[i])));
+        return result;
+    }
+
+    Image MeanChannels() const {
+        INSPIRECV_CHECK(image_.Channels() >= 1);
+        if (image_.Channels() == 1) return Clone();
+        Image result;
+        result.impl_->image_.Reset(image_.Width(), image_.Height(), 1);
+        for (int y = 0; y < image_.Height(); ++y) {
+            const uint8_t* row = image_.Row(y);
+            uint8_t* out = result.impl_->image_.Row(y);
+            for (int x = 0; x < image_.Width(); ++x) {
+                int s = 0;
+                for (int c = 0; c < image_.Channels(); ++c) s += row[x * image_.Channels() + c];
+                out[x] = static_cast<uint8_t>(s / image_.Channels());
+            }
+        }
+        return result;
+    }
+
+    Image Blend(const Image::Impl& other, const Image::Impl& mask) const {
+        INSPIRECV_CHECK(image_.Width() == other.Width() && image_.Height() == other.Height() &&
+                        image_.Channels() == other.Channels());
+        INSPIRECV_CHECK(mask.Channels() == 1 && mask.Width() == image_.Width() &&
+                        mask.Height() == image_.Height());
+        Image result;
+        result.impl_->image_.Reset(image_.Width(), image_.Height(), image_.Channels());
+        const uint8_t* a = image_.Data();
+        const uint8_t* b = other.image_.Data();
+        const uint8_t* m = mask.image_.Data();
+        uint8_t* d = result.impl_->image_.Data();
+        for (int y = 0; y < image_.Height(); ++y) {
+            for (int x = 0; x < image_.Width(); ++x) {
+                int mi = m[y * image_.Width() + x];
+                int inv = 255 - mi;
+                int base = (y * image_.Width() + x) * image_.Channels();
+                for (int c = 0; c < image_.Channels(); ++c) {
+                    int va = a[base + c];
+                    int vb = b[base + c];
+                    d[base + c] = static_cast<uint8_t>((mi * va + inv * vb + 127) / 255);
+                }
+            }
+        }
+        return result;
     }
 
     // Drawing operations

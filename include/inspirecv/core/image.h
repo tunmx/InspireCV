@@ -231,6 +231,22 @@ public:
     Image GaussianBlur(int kernel_size, double sigma) const;
 
     /**
+     * @brief Apply morphological erosion (only for single-channel images)
+     * @param kernel_size Size of square structuring element (odd, >=1)
+     * @param iterations Number of iterations (default 1)
+     * @return Eroded image
+     */
+    Image Erode(int kernel_size, int iterations = 1) const;
+
+    /**
+     * @brief Apply morphological dilation (only for single-channel images)
+     * @param kernel_size Size of square structuring element (odd, >=1)
+     * @param iterations Number of iterations (default 1)
+     * @return Dilated image
+     */
+    Image Dilate(int kernel_size, int iterations = 1) const;
+
+    /**
      * @brief Apply threshold operation
      * @param thresh Threshold value
      * @param maxval Maximum value
@@ -244,6 +260,22 @@ public:
      * @return Grayscale image
      */
     Image ToGray() const;
+
+    /**
+     * @brief Per-pixel absolute difference with another image (same size/channels)
+     */
+    Image AbsDiff(const Image& other) const;
+
+    /**
+     * @brief Average across channels to single-channel (integer mean for U8)
+     */
+    Image MeanChannels() const;
+
+    /**
+     * @brief Alpha blend with another image using single-channel 0..255 mask
+     * out = (mask*this + (255-mask)*other)/255
+     */
+    Image Blend(const Image& other, const Image& mask) const;
 
     /**
      * @brief Draw line between two points
