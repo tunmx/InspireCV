@@ -9,6 +9,23 @@
 #include <limits>
 #include <type_traits>
 #include <thread>
+#include <deque>
+
+#if defined(__has_include)
+#  if (defined(__ARM_NEON) || defined(__ARM_NEON__)) && __has_include(<arm_neon.h>)
+#    include <arm_neon.h>
+#  endif
+#  if (defined(__AVX2__) || defined(__SSE2__)) && __has_include(<immintrin.h>)
+#    include <immintrin.h>
+#  endif
+#else
+#  if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#    include <arm_neon.h>
+#  endif
+#  if defined(__AVX2__) || defined(__SSE2__)
+#    include <immintrin.h>
+#  endif
+#endif
 
 #include "image_bmp.h"
 #include "check.h"
@@ -1111,18 +1128,99 @@ Image<D> Image<D>::GaussianBlur(int ksize, float sigmaX) const {
     parallelForRows(height_, [&](int yBegin, int yEnd) {
         for (int y = yBegin; y < yEnd; ++y) {
             const int* yIdx = &vertIndices[static_cast<size_t>(y) * ksize];
-            for (int x = 0; x < width_; ++x) {
-                size_t baseOut = (static_cast<size_t>(y) * width_ + x) * channels_;
-                for (int c = 0; c < channels_; ++c) {
+            if (channels_ == 1) {
+                int x = 0;
+#if defined(__AVX2__)
+                for (; x + 8 <= width_; x += 8) {
+                    __m256 acc0 = _mm256_setzero_ps();
+                    for (int k = 0; k < ksize; ++k) {
+                        int yy = yIdx[k];
+                        const float* src = &tmp[static_cast<size_t>(yy) * width_ + x];
+                        __m256 s = _mm256_loadu_ps(src);
+                        __m256 w = _mm256_set1_ps(kernel[k]);
+#  if defined(__FMA__)
+                        acc0 = _mm256_fmadd_ps(s, w, acc0);
+#  else
+                        acc0 = _mm256_add_ps(acc0, _mm256_mul_ps(s, w));
+#  endif
+                    }
+                    alignas(32) float buf[8];
+                    _mm256_storeu_ps(buf, acc0);
+                    size_t baseOut = static_cast<size_t>(y) * width_ + x;
+                    for (int i = 0; i < 8; ++i) {
+                        float v = buf[i];
+                        if (std::is_integral<D>::value) v = std::floor(v + 0.5f);
+                        v = v < lo ? lo : (v > hi ? hi : v);
+                        dst_data[baseOut + i] = static_cast<D>(v);
+                    }
+                }
+#elif defined(__SSE2__)
+                for (; x + 4 <= width_; x += 4) {
+                    __m128 acc0 = _mm_setzero_ps();
+                    for (int k = 0; k < ksize; ++k) {
+                        int yy = yIdx[k];
+                        const float* src = &tmp[static_cast<size_t>(yy) * width_ + x];
+                        __m128 s = _mm_loadu_ps(src);
+                        __m128 w = _mm_set1_ps(kernel[k]);
+                        acc0 = _mm_add_ps(acc0, _mm_mul_ps(s, w));
+                    }
+                    alignas(16) float buf[4];
+                    _mm_storeu_ps(buf, acc0);
+                    size_t baseOut = static_cast<size_t>(y) * width_ + x;
+                    for (int i = 0; i < 4; ++i) {
+                        float v = buf[i];
+                        if (std::is_integral<D>::value) v = std::floor(v + 0.5f);
+                        v = v < lo ? lo : (v > hi ? hi : v);
+                        dst_data[baseOut + i] = static_cast<D>(v);
+                    }
+                }
+#elif (defined(__ARM_NEON) || defined(__ARM_NEON__))
+                for (; x + 4 <= width_; x += 4) {
+                    float32x4_t acc0 = vdupq_n_f32(0.0f);
+                    for (int k = 0; k < ksize; ++k) {
+                        int yy = yIdx[k];
+                        const float* src = &tmp[static_cast<size_t>(yy) * width_ + x];
+                        float32x4_t s = vld1q_f32(src);
+                        float32x4_t w = vdupq_n_f32(kernel[k]);
+                        acc0 = vmlaq_f32(acc0, s, w);
+                    }
+                    alignas(16) float buf[4];
+                    vst1q_f32(buf, acc0);
+                    size_t baseOut = static_cast<size_t>(y) * width_ + x;
+                    for (int i = 0; i < 4; ++i) {
+                        float v = buf[i];
+                        if (std::is_integral<D>::value) v = std::floor(v + 0.5f);
+                        v = v < lo ? lo : (v > hi ? hi : v);
+                        dst_data[baseOut + i] = static_cast<D>(v);
+                    }
+                }
+#endif
+                // scalar tail
+                for (; x < width_; ++x) {
                     float acc = 0.f;
                     for (int k = 0; k < ksize; ++k) {
                         int yy = yIdx[k];
-                        size_t baseIn = (static_cast<size_t>(yy) * width_ + x) * channels_ + c;
-                        acc += tmp[baseIn] * kernel[k];
+                        acc += tmp[static_cast<size_t>(yy) * width_ + x] * kernel[k];
                     }
                     if (std::is_integral<D>::value) acc = std::floor(acc + 0.5f);
                     acc = acc < lo ? lo : (acc > hi ? hi : acc);
-                    dst_data[baseOut + c] = static_cast<D>(acc);
+                    dst_data[static_cast<size_t>(y) * width_ + x] = static_cast<D>(acc);
+                }
+            } else {
+                // Fallback: original scalar path for multi-channel
+                for (int x = 0; x < width_; ++x) {
+                    size_t baseOut = (static_cast<size_t>(y) * width_ + x) * channels_;
+                    for (int c = 0; c < channels_; ++c) {
+                        float acc = 0.f;
+                        for (int k = 0; k < ksize; ++k) {
+                            int yy = yIdx[k];
+                            size_t baseIn = (static_cast<size_t>(yy) * width_ + x) * channels_ + c;
+                            acc += tmp[baseIn] * kernel[k];
+                        }
+                        if (std::is_integral<D>::value) acc = std::floor(acc + 0.5f);
+                        acc = acc < lo ? lo : (acc > hi ? hi : acc);
+                        dst_data[baseOut + c] = static_cast<D>(acc);
+                    }
                 }
             }
         }
@@ -1135,88 +1233,273 @@ template <typename D>
 Image<D> Image<D>::MinFilter(int kernel_left, int kernel_right, int kernel_top,
                              int kernel_bottom) const {
     INSPIRECV_CHECK(Channels() == 1) << "channels=" << Channels();
+    const int W = Width();
+    const int H = Height();
+    const int L = kernel_left + 1;
+    const int R = kernel_right + 1;
+    const int T = kernel_top + 1;
+    const int B = kernel_bottom + 1;
+
     Image<D> tmp_image;
-    if (kernel_left == 0 && kernel_right == 0) {
-        tmp_image = Clone();
-    } else {
-        tmp_image.Reset(Width(), Height(), Channels());
-        auto dst_iter = tmp_image.Data();
-        for (int i = 0; i < Height(); ++i) {
-            for (int j = 0; j < Width(); ++j) {
-                auto p = at(i, j);
-                D v = *p;
-                for (int k = 1; k <= kernel_left && j - k >= 0; ++k)
-                    v = std::min(v, p[-k]);
-                for (int k = 1; k <= kernel_right && j + k < Width(); ++k)
-                    v = std::min(v, p[k]);
-                *dst_iter++ = v;
+    tmp_image.Reset(W, H, 1);
+
+    // Horizontal pass using trailing minima (left) and leading minima (right via reversed trailing)
+    {
+        std::vector<D> left_trailing(static_cast<size_t>(W));
+        std::vector<D> right_leading(static_cast<size_t>(W));
+
+        auto trailing_min = [&](const D* row, D* out, int n, int win) {
+            std::deque<int> dq;
+            for (int i = 0; i < n; ++i) {
+                while (!dq.empty() && row[dq.back()] >= row[i]) dq.pop_back();
+                dq.push_back(i);
+                int head = i - win + 1;  // head of window
+                if (dq.front() < head) dq.pop_front();
+                out[i] = row[dq.front()];
             }
+        };
+
+        auto leading_min = [&](const D* row, D* out, int n, int win) {
+            // compute trailing minima on reversed row, then map back
+            std::deque<int> dq;
+            for (int i = n - 1; i >= 0; --i) {
+                int ri = n - 1 - i;  // reversed index increasing
+                D v = row[i];
+                while (!dq.empty() && row[n - 1 - dq.back()] >= v) dq.pop_back();
+                dq.push_back(ri);
+                int head = ri - win + 1;
+                if (dq.front() < head) dq.pop_front();
+                out[i] = row[n - 1 - dq.front()];
+            }
+        };
+
+        for (int y = 0; y < H; ++y) {
+            const D* row = Row(y);
+            D* tmp_row = tmp_image.Row(y);
+
+            if (kernel_left == 0 && kernel_right == 0) {
+                std::memcpy(tmp_row, row, static_cast<size_t>(W) * sizeof(D));
+                continue;
+            }
+
+            trailing_min(row, left_trailing.data(), W, L);
+            leading_min(row, right_leading.data(), W, R);
+
+            // Combine per-position minima
+            int x = 0;
+#if defined(__AVX2__)
+            if (std::is_same<D, uint8_t>::value) {
+                for (; x + 32 <= W; x += 32) {
+                    __m256i a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(left_trailing.data() + x));
+                    __m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(right_leading.data() + x));
+                    __m256i m = _mm256_min_epu8(a, b);
+                    _mm256_storeu_si256(reinterpret_cast<__m256i*>(tmp_row + x), m);
+                }
+            }
+#endif
+#if defined(__SSE2__)
+            if (std::is_same<D, uint8_t>::value) {
+                for (; x + 16 <= W; x += 16) {
+                    __m128i a = _mm_loadu_si128(reinterpret_cast<const __m128i*>(left_trailing.data() + x));
+                    __m128i b = _mm_loadu_si128(reinterpret_cast<const __m128i*>(right_leading.data() + x));
+                    __m128i m = _mm_min_epu8(a, b);
+                    _mm_storeu_si128(reinterpret_cast<__m128i*>(tmp_row + x), m);
+                }
+            }
+#endif
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+            if (std::is_same<D, uint8_t>::value) {
+                for (; x + 16 <= W; x += 16) {
+                    uint8x16_t a = vld1q_u8(reinterpret_cast<const uint8_t*>(left_trailing.data() + x));
+                    uint8x16_t b = vld1q_u8(reinterpret_cast<const uint8_t*>(right_leading.data() + x));
+                    uint8x16_t m = vminq_u8(a, b);
+                    vst1q_u8(reinterpret_cast<uint8_t*>(tmp_row + x), m);
+                }
+            }
+#endif
+            for (; x < W; ++x) tmp_row[x] = std::min(left_trailing[x], right_leading[x]);
         }
     }
 
+    // Vertical pass using column-wise trailing/leading minima
     if (kernel_top == 0 && kernel_bottom == 0) {
         return tmp_image;
-    } else {
-        Image<D> res_image;
-        res_image.Reset(Width(), Height(), Channels());
-        auto dst_iter = res_image.Data();
-        for (int i = 0; i < Height(); ++i) {
-            for (int j = 0; j < Width(); ++j) {
-                auto p = tmp_image.at(i, j);
-                D v = *p;
-                for (int k = 1; k <= kernel_top && i - k >= 0; ++k)
-                    v = std::min(v, p[-k * Width()]);
-                for (int k = 1; k <= kernel_bottom && i + k < Height(); ++k)
-                    v = std::min(v, p[k * Width()]);
-                *dst_iter++ = v;
-            }
-        }
-        return res_image;
     }
+
+    Image<D> res_image;
+    res_image.Reset(W, H, 1);
+
+    std::vector<D> col(static_cast<size_t>(H));
+    std::vector<D> top_trailing(static_cast<size_t>(H));
+    std::vector<D> bottom_leading(static_cast<size_t>(H));
+
+    auto trailing_min_col = [&](const D* c, D* out, int n, int win) {
+        std::deque<int> dq;
+        for (int i = 0; i < n; ++i) {
+            while (!dq.empty() && c[dq.back()] >= c[i]) dq.pop_back();
+            dq.push_back(i);
+            int head = i - win + 1;
+            if (dq.front() < head) dq.pop_front();
+            out[i] = c[dq.front()];
+        }
+    };
+
+    auto leading_min_col = [&](const D* c, D* out, int n, int win) {
+        std::deque<int> dq;
+        for (int i = n - 1; i >= 0; --i) {
+            int ri = n - 1 - i;
+            D v = c[i];
+            while (!dq.empty() && c[n - 1 - dq.back()] >= v) dq.pop_back();
+            dq.push_back(ri);
+            int head = ri - win + 1;
+            if (dq.front() < head) dq.pop_front();
+            out[i] = c[n - 1 - dq.front()];
+        }
+    };
+
+    for (int x = 0; x < W; ++x) {
+        for (int y = 0; y < H; ++y) col[y] = tmp_image.Row(y)[x];
+        trailing_min_col(col.data(), top_trailing.data(), H, T);
+        leading_min_col(col.data(), bottom_leading.data(), H, B);
+        for (int y = 0; y < H; ++y) res_image.Row(y)[x] = std::min(top_trailing[y], bottom_leading[y]);
+    }
+
+    return res_image;
 }
 
 template <typename D>
 Image<D> Image<D>::MaxFilter(int kernel_left, int kernel_right, int kernel_top,
                              int kernel_bottom) const {
     INSPIRECV_CHECK(Channels() == 1) << "channels=" << Channels();
+    const int W = Width();
+    const int H = Height();
+    const int L = kernel_left + 1;
+    const int R = kernel_right + 1;
+    const int T = kernel_top + 1;
+    const int B = kernel_bottom + 1;
+
     Image<D> tmp_image;
-    if (kernel_left == 0 && kernel_right == 0) {
-        tmp_image = Clone();
-    } else {
-        tmp_image.Reset(Width(), Height(), Channels());
-        auto dst_iter = tmp_image.Data();
-        for (int i = 0; i < Height(); ++i) {
-            for (int j = 0; j < Width(); ++j) {
-                auto p = at(i, j);
-                D v = *p;
-                for (int k = 1; k <= kernel_left && j - k >= 0; ++k)
-                    v = std::max(v, p[-k]);
-                for (int k = 1; k <= kernel_right && j + k < Width(); ++k)
-                    v = std::max(v, p[k]);
-                *dst_iter++ = v;
+    tmp_image.Reset(W, H, 1);
+
+    // Horizontal pass using trailing maxima (left) and leading maxima (right via reversed trailing)
+    {
+        std::vector<D> left_trailing(static_cast<size_t>(W));
+        std::vector<D> right_leading(static_cast<size_t>(W));
+
+        auto trailing_max = [&](const D* row, D* out, int n, int win) {
+            std::deque<int> dq;
+            for (int i = 0; i < n; ++i) {
+                while (!dq.empty() && row[dq.back()] <= row[i]) dq.pop_back();
+                dq.push_back(i);
+                int head = i - win + 1;
+                if (dq.front() < head) dq.pop_front();
+                out[i] = row[dq.front()];
             }
+        };
+
+        auto leading_max = [&](const D* row, D* out, int n, int win) {
+            std::deque<int> dq;
+            for (int i = n - 1; i >= 0; --i) {
+                int ri = n - 1 - i;
+                D v = row[i];
+                while (!dq.empty() && row[n - 1 - dq.back()] <= v) dq.pop_back();
+                dq.push_back(ri);
+                int head = ri - win + 1;
+                if (dq.front() < head) dq.pop_front();
+                out[i] = row[n - 1 - dq.front()];
+            }
+        };
+
+        for (int y = 0; y < H; ++y) {
+            const D* row = Row(y);
+            D* tmp_row = tmp_image.Row(y);
+
+            if (kernel_left == 0 && kernel_right == 0) {
+                std::memcpy(tmp_row, row, static_cast<size_t>(W) * sizeof(D));
+                continue;
+            }
+
+            trailing_max(row, left_trailing.data(), W, L);
+            leading_max(row, right_leading.data(), W, R);
+
+            int x = 0;
+#if defined(__AVX2__)
+            if (std::is_same<D, uint8_t>::value) {
+                for (; x + 32 <= W; x += 32) {
+                    __m256i a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(left_trailing.data() + x));
+                    __m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(right_leading.data() + x));
+                    __m256i m = _mm256_max_epu8(a, b);
+                    _mm256_storeu_si256(reinterpret_cast<__m256i*>(tmp_row + x), m);
+                }
+            }
+#endif
+#if defined(__SSE2__)
+            if (std::is_same<D, uint8_t>::value) {
+                for (; x + 16 <= W; x += 16) {
+                    __m128i a = _mm_loadu_si128(reinterpret_cast<const __m128i*>(left_trailing.data() + x));
+                    __m128i b = _mm_loadu_si128(reinterpret_cast<const __m128i*>(right_leading.data() + x));
+                    __m128i m = _mm_max_epu8(a, b);
+                    _mm_storeu_si128(reinterpret_cast<__m128i*>(tmp_row + x), m);
+                }
+            }
+#endif
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+            if (std::is_same<D, uint8_t>::value) {
+                for (; x + 16 <= W; x += 16) {
+                    uint8x16_t a = vld1q_u8(reinterpret_cast<const uint8_t*>(left_trailing.data() + x));
+                    uint8x16_t b = vld1q_u8(reinterpret_cast<const uint8_t*>(right_leading.data() + x));
+                    uint8x16_t m = vmaxq_u8(a, b);
+                    vst1q_u8(reinterpret_cast<uint8_t*>(tmp_row + x), m);
+                }
+            }
+#endif
+            for (; x < W; ++x) tmp_row[x] = std::max(left_trailing[x], right_leading[x]);
         }
     }
 
     if (kernel_top == 0 && kernel_bottom == 0) {
         return tmp_image;
-    } else {
-        Image<D> res_image;
-        res_image.Reset(Width(), Height(), Channels());
-        auto dst_iter = res_image.Data();
-        for (int i = 0; i < Height(); ++i) {
-            for (int j = 0; j < Width(); ++j) {
-                auto p = tmp_image.at(i, j);
-                D v = *p;
-                for (int k = 1; k <= kernel_top && i - k >= 0; ++k)
-                    v = std::max(v, p[-k * Width()]);
-                for (int k = 1; k <= kernel_bottom && i + k < Height(); ++k)
-                    v = std::max(v, p[k * Width()]);
-                *dst_iter++ = v;
-            }
-        }
-        return res_image;
     }
+
+    Image<D> res_image;
+    res_image.Reset(W, H, 1);
+
+    std::vector<D> col(static_cast<size_t>(H));
+    std::vector<D> top_trailing(static_cast<size_t>(H));
+    std::vector<D> bottom_leading(static_cast<size_t>(H));
+
+    auto trailing_max_col = [&](const D* c, D* out, int n, int win) {
+        std::deque<int> dq;
+        for (int i = 0; i < n; ++i) {
+            while (!dq.empty() && c[dq.back()] <= c[i]) dq.pop_back();
+            dq.push_back(i);
+            int head = i - win + 1;
+            if (dq.front() < head) dq.pop_front();
+            out[i] = c[dq.front()];
+        }
+    };
+
+    auto leading_max_col = [&](const D* c, D* out, int n, int win) {
+        std::deque<int> dq;
+        for (int i = n - 1; i >= 0; --i) {
+            int ri = n - 1 - i;
+            D v = c[i];
+            while (!dq.empty() && c[n - 1 - dq.back()] <= v) dq.pop_back();
+            dq.push_back(ri);
+            int head = ri - win + 1;
+            if (dq.front() < head) dq.pop_front();
+            out[i] = c[n - 1 - dq.front()];
+        }
+    };
+
+    for (int x = 0; x < W; ++x) {
+        for (int y = 0; y < H; ++y) col[y] = tmp_image.Row(y)[x];
+        trailing_max_col(col.data(), top_trailing.data(), H, T);
+        leading_max_col(col.data(), bottom_leading.data(), H, B);
+        for (int y = 0; y < H; ++y) res_image.Row(y)[x] = std::max(top_trailing[y], bottom_leading[y]);
+    }
+
+    return res_image;
 }
 
 template <typename D>
