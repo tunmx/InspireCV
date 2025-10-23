@@ -72,7 +72,11 @@ int main() {
     int k2 = std::max(mask_size / 20, 5);
 
     // Morphology and blurs
+    TimeSpend t2("Erode-"+std::string(GetCVBackend()));
+    t2.Start();
     Image img_mask = img_white_bin.Erode(k1, 1);
+    t2.Stop();
+    std::cout << t2 << std::endl;
     // removed: fake_diff_bin dilate
 
     // Gaussian blurs (ensure odd kernel)

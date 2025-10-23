@@ -370,26 +370,33 @@ public:
         }
         return result;
 #else
-        // Optimized vectorized path using OpenCV arithmetics in 16U
+        // Optimized path using OpenCV arithmetics in 16U; exact to per-pixel integer formula
+        // out = (m * a + (255 - m) * b + 127) / 255
         cv::Mat A16, B16, M16;
         A.convertTo(A16, CV_16U);
         B.convertTo(B16, CV_16U);
         M1.convertTo(M16, CV_16U);
 
-        cv::Mat Mx; // replicate mask to match channels when needed
-        if (cn == 3) {
-            cv::merge(std::vector<cv::Mat>{M16, M16, M16}, Mx);
-        } else {
+        cv::Mat Mx;
+        if (cn == 1) {
             Mx = M16;
+        } else {
+            // replicate mask across channels (cn can be 3, 4, ...)
+            std::vector<cv::Mat> mv(static_cast<size_t>(cn), M16);
+            cv::merge(mv, Mx);
         }
 
-        cv::Mat inv; cv::subtract(cv::Scalar::all(255), Mx, inv, cv::noArray(), CV_16U);
+        cv::Mat inv;
+        cv::subtract(cv::Scalar::all(255), Mx, inv, cv::noArray(), CV_16U);
+
         cv::Mat p1, p2, sum;
-        cv::multiply(Mx, A16, p1);     // M*A
-        cv::multiply(inv, B16, p2);    // (255-M)*B
-        cv::add(p1, p2, sum);          // sum
-        cv::add(sum, cv::Scalar::all(127), sum); // rounding
-        cv::Mat out16; cv::divide(sum, 255, out16, 1, CV_16U);
+        cv::multiply(Mx, A16, p1, 1, CV_16U);   // M*A
+        cv::multiply(inv, B16, p2, 1, CV_16U);  // (255-M)*B
+        cv::add(p1, p2, sum, cv::noArray(), CV_16U);
+        cv::add(sum, cv::Scalar::all(127), sum, cv::noArray(), CV_16U); // for rounding
+
+        cv::Mat out16;
+        cv::divide(sum, 255, out16, 1, CV_16U); // integer division (floor)
         out16.convertTo(result.impl_->image_, CV_8U);
         return result;
 #endif
