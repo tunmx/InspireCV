@@ -3,7 +3,7 @@
 // #include <inspirecv/okcv/io/stb_warpper.h>
 
 int main() {
-    inspirecv::Image image = inspirecv::Image::Create();
+    inspirecv::ImageT<float> image = inspirecv::ImageT<float>::Create();
     image.Read("../images/r0.jpg");
     image.Show();
 
@@ -11,9 +11,9 @@ int main() {
     auto gray = resized.ToGray();
     gray.Show();
 
-    std::cout << gray << std::endl;
+    // std::cout << gray << std::endl;
 
-    inspirecv::Image ud = inspirecv::Image::Create();
+    inspirecv::ImageT<float> ud = inspirecv::ImageT<float>::Create();
 
     ud.Read("../images/r0.jpg");
     ud.Write("stb_r0_write.jpg");

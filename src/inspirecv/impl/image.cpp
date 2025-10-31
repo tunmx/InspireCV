@@ -5,185 +5,221 @@
 
 namespace inspirecv {
 
-// Default destructor
-Image::~Image() = default;
+template<typename Pixel>
+ImageT<Pixel>::~ImageT() = default;
 
-// Default constructor
-Image::Image() {
+template<typename Pixel>
+ImageT<Pixel>::ImageT() {
     impl_ = std::make_unique<Impl>(0, 0, 0);
 }
 
-// Move constructor
-Image::Image(Image&& other) noexcept = default;
+template<typename Pixel>
+ImageT<Pixel>::ImageT(ImageT&& other) noexcept = default;
 
-// Move assignment operator
-Image& Image::operator=(Image&& other) noexcept = default;
+template<typename Pixel>
+ImageT<Pixel>& ImageT<Pixel>::operator=(ImageT&& other) noexcept = default;
 
-// Construct image with given parameters
-Image::Image(int width, int height, int channels, const uint8_t* data, bool copy_data) {
+template<typename Pixel>
+ImageT<Pixel>::ImageT(int width, int height, int channels, const Pixel* data, bool copy_data) {
     impl_ = std::make_unique<Impl>(width, height, channels, data, copy_data);
 }
 
-// Reset image
-void Image::Reset(int width, int height, int channels, const uint8_t* data) {
+template<typename Pixel>
+void ImageT<Pixel>::Reset(int width, int height, int channels, const Pixel* data) {
     impl_->Reset(width, height, channels, data);
 }
 
-// Implementation of Clone method
-Image Image::Clone() const {
-    Image new_image = impl_->Clone();
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::Clone() const {
+    ImageT<Pixel> new_image = impl_->Clone();
     return new_image;
 }
 
-// Implementation of other methods remain unchanged
-int Image::Width() const {
+template<typename Pixel>
+int ImageT<Pixel>::Width() const {
     return impl_->Width();
 }
 
-int Image::Height() const {
+template<typename Pixel>
+int ImageT<Pixel>::Height() const {
     return impl_->Height();
 }
 
-int Image::Channels() const {
+template<typename Pixel>
+int ImageT<Pixel>::Channels() const {
     return impl_->Channels();
 }
 
-bool Image::Empty() const {
+template<typename Pixel>
+bool ImageT<Pixel>::Empty() const {
     return impl_->Empty();
 }
 
-const uint8_t* Image::Data() const {
+template<typename Pixel>
+const Pixel* ImageT<Pixel>::Data() const {
     return impl_->Data();
 }
 
-void* Image::GetInternalImage() const {
+template<typename Pixel>
+void* ImageT<Pixel>::GetInternalImage() const {
     return impl_->GetInternalImage();
 }
 
-bool Image::Read(const std::string& filename, int channels) {
+template<typename Pixel>
+bool ImageT<Pixel>::Read(const std::string& filename, int channels) {
     return impl_->Read(filename, channels);
 }
 
-bool Image::Write(const std::string& filename) const {
+template<typename Pixel>
+bool ImageT<Pixel>::Write(const std::string& filename) const {
     return impl_->Write(filename);
 }
 
-void Image::Show(const std::string& window_name, int delay) const {
+template<typename Pixel>
+void ImageT<Pixel>::Show(const std::string& window_name, int delay) const {
     impl_->Show(window_name, delay);
 }
 
-void Image::Fill(double value) {
+template<typename Pixel>
+void ImageT<Pixel>::Fill(double value) {
     impl_->Fill(value);
 }
 
-Image Image::Mul(double scale) const {
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::Mul(double scale) const {
     return impl_->Mul(scale);
 }
 
-Image Image::Add(double value) const {
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::Add(double value) const {
     return impl_->Add(value);
 }
 
-Image Image::Resize(int width, int height, bool use_linear) const {
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::Resize(int width, int height, bool use_linear) const {
     return impl_->Resize(width, height, use_linear);
 }
 
-Image Image::Crop(const Rect<int>& rect) const {
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::Crop(const Rect<int>& rect) const {
     return impl_->Crop(rect);
 }
 
-Image Image::WarpAffine(const TransformMatrix& matrix, int width, int height) const {
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::WarpAffine(const TransformMatrix& matrix, int width, int height) const {
     return impl_->WarpAffine(matrix, width, height);
 }
 
-Image Image::Rotate90() const {
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::Rotate90() const {
     return impl_->Rotate90();
 }
 
-Image Image::Rotate180() const {
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::Rotate180() const {
     return impl_->Rotate180();
 }
 
-Image Image::Rotate270() const {
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::Rotate270() const {
     return impl_->Rotate270();
 }
 
-Image Image::SwapRB() const {
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::SwapRB() const {
     return impl_->SwapRB();
 }
 
-Image Image::FlipHorizontal() const {
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::FlipHorizontal() const {
     return impl_->FlipHorizontal();
 }
 
-Image Image::FlipVertical() const {
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::FlipVertical() const {
     return impl_->FlipVertical();
 }
 
-Image Image::Pad(int top, int bottom, int left, int right, const std::vector<double>& color) const {
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::Pad(int top, int bottom, int left, int right, const std::vector<double>& color) const {
     return impl_->Pad(top, bottom, left, right, color);
 }
 
-void Image::DrawLine(const Point<int>& p1, const Point<int>& p2, const std::vector<double>& color,
+template<typename Pixel>
+void ImageT<Pixel>::DrawLine(const Point<int>& p1, const Point<int>& p2, const std::vector<double>& color,
                      int thickness) {
     impl_->DrawLine(p1, p2, color, thickness);
 }
 
-void Image::DrawRect(const Rect<int>& rect, const std::vector<double>& color, int thickness) {
+template<typename Pixel>
+void ImageT<Pixel>::DrawRect(const Rect<int>& rect, const std::vector<double>& color, int thickness) {
     impl_->DrawRect(rect, color, thickness);
 }
 
-void Image::DrawCircle(const Point<int>& center, int radius, const std::vector<double>& color,
+template<typename Pixel>
+void ImageT<Pixel>::DrawCircle(const Point<int>& center, int radius, const std::vector<double>& color,
                        int thickness) {
     impl_->DrawCircle(center, radius, color, thickness);
 }
 
-void Image::Fill(const Rect<int>& rect, const std::vector<double>& color) {
+template<typename Pixel>
+void ImageT<Pixel>::Fill(const Rect<int>& rect, const std::vector<double>& color) {
     impl_->Fill(rect, color);
 }
 
-Image Image::GaussianBlur(int kernel_size, double sigma) const {
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::GaussianBlur(int kernel_size, double sigma) const {
     return impl_->GaussianBlur(kernel_size, sigma);
 }
 
-Image Image::Erode(int kernel_size, int iterations) const {
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::Erode(int kernel_size, int iterations) const {
     return impl_->Erode(kernel_size, iterations);
 }
 
-Image Image::Dilate(int kernel_size, int iterations) const {
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::Dilate(int kernel_size, int iterations) const {
     return impl_->Dilate(kernel_size, iterations);
 }
 
-Image Image::Threshold(double thresh, double maxval, int type) const {
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::Threshold(double thresh, double maxval, int type) const {
     return impl_->Threshold(thresh, maxval, type);
 }
 
-Image Image::ToGray() const {
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::ToGray() const {
     return impl_->ToGray();
 }
 
-Image Image::AbsDiff(const Image& other) const {
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::AbsDiff(const ImageT& other) const {
     return impl_->AbsDiff(*other.impl_);
 }
 
-Image Image::MeanChannels() const {
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::MeanChannels() const {
     return impl_->MeanChannels();
 }
 
-Image Image::Blend(const Image& other, const Image& mask) const {
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::Blend(const ImageT& other, const ImageT<uint8_t>& mask) const {
     return impl_->Blend(*other.impl_, *mask.impl_);
 }
 
-Image Image::Create(int width, int height, int channels, const uint8_t* data, bool copy_data) {
-    return Image(width, height, channels, data, copy_data);
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::Create(int width, int height, int channels, const Pixel* data, bool copy_data) {
+    return ImageT(width, height, channels, data, copy_data);
 }
 
-Image Image::Create() {
-    return Image(0, 0, 0);
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::Create() {
+    return ImageT(0, 0, 0);
 }
 
-Image Image::Create(const std::string& filename, int channels) {
-    Image image;
+template<typename Pixel>
+ImageT<Pixel> ImageT<Pixel>::Create(const std::string& filename, int channels) {
+    ImageT image;
     bool success = image.Read(filename, channels);
     if (!success) {
         INSPIRECV_LOG(WARN) << "Failed to read image from " << filename << " with channels "
@@ -192,12 +228,20 @@ Image Image::Create(const std::string& filename, int channels) {
     return image;
 }
 
-// Private constructor
-Image::Image(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+template<typename Pixel>
+ImageT<Pixel>::ImageT(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 
-std::ostream& operator<<(std::ostream& os, const Image& image) {
+template<typename Pixel>
+std::ostream& operator<<(std::ostream& os, const ImageT<Pixel>& image) {
     image.impl_->Print(os);
     return os;
 }
+
+// Explicit instantiation for common pixel types
+template class ImageT<uint8_t>;
+template std::ostream& operator<< <uint8_t>(std::ostream& os, const ImageT<uint8_t>& image);
+
+template class ImageT<float>;
+template std::ostream& operator<< <float>(std::ostream& os, const ImageT<float>& image);
 
 }  // namespace inspirecv

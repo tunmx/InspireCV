@@ -122,9 +122,80 @@ void Image<D>::Read(const char *filename, int channels) {
     ImageReader::ImageData data;
     bool succ = ImageReader::Read(filename, data, channels, ImageReader::ColorOrder::BGR);
     INSPIRECV_CHECK(succ) << "Could not open file " << filename;
-    // The default bgr is used as with opencv
-    this->Reset(data.width, data.height, data.channels,
-                reinterpret_cast<const D *>(data.data.data()));
+    // The default BGR is used as with OpenCV
+    if (std::is_same<D, uint8_t>::value) {
+        // direct copy for U8
+        this->Reset(data.width, data.height, data.channels,
+                    reinterpret_cast<const D*>(data.data.data()));
+    } else {
+        // convert bytes -> float (0..255 range)
+        const size_t count = static_cast<size_t>(data.width) * data.height * data.channels;
+        std::vector<D> buffer(count);
+        const unsigned char* src = data.data.data();
+
+        if (std::is_same<D, float>::value) {
+            // SIMD-accelerated u8 -> f32 conversion
+            float* dst = reinterpret_cast<float*>(buffer.data());
+            size_t i = 0;
+#if defined(__AVX2__)
+            for (; i + 32 <= count; i += 32) {
+                __m128i m0 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i));
+                __m128i m1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i + 16));
+
+                __m256i u16_0 = _mm256_cvtepu8_epi16(m0); // 16 x u16
+                __m256i u16_1 = _mm256_cvtepu8_epi16(m1); // 16 x u16
+
+                __m128i u16_0_lo = _mm256_castsi256_si128(u16_0);
+                __m128i u16_0_hi = _mm256_extracti128_si256(u16_0, 1);
+                __m128i u16_1_lo = _mm256_castsi256_si128(u16_1);
+                __m128i u16_1_hi = _mm256_extracti128_si256(u16_1, 1);
+
+                __m256i u32_00 = _mm256_cvtepu16_epi32(u16_0_lo);
+                __m256i u32_01 = _mm256_cvtepu16_epi32(u16_0_hi);
+                __m256i u32_10 = _mm256_cvtepu16_epi32(u16_1_lo);
+                __m256i u32_11 = _mm256_cvtepu16_epi32(u16_1_hi);
+
+                __m256 f00 = _mm256_cvtepi32_ps(u32_00);
+                __m256 f01 = _mm256_cvtepi32_ps(u32_01);
+                __m256 f10 = _mm256_cvtepi32_ps(u32_10);
+                __m256 f11 = _mm256_cvtepi32_ps(u32_11);
+
+                _mm256_storeu_ps(dst + i + 0, f00);
+                _mm256_storeu_ps(dst + i + 8, f01);
+                _mm256_storeu_ps(dst + i + 16, f10);
+                _mm256_storeu_ps(dst + i + 24, f11);
+            }
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+            for (; i + 16 <= count; i += 16) {
+                uint8x16_t v = vld1q_u8(src + i);
+                uint8x8_t vlo = vget_low_u8(v);
+                uint8x8_t vhi = vget_high_u8(v);
+
+                uint16x8_t u16lo = vmovl_u8(vlo);
+                uint16x8_t u16hi = vmovl_u8(vhi);
+
+                uint32x4_t u32_0 = vmovl_u16(vget_low_u16(u16lo));
+                uint32x4_t u32_1 = vmovl_u16(vget_high_u16(u16lo));
+                uint32x4_t u32_2 = vmovl_u16(vget_low_u16(u16hi));
+                uint32x4_t u32_3 = vmovl_u16(vget_high_u16(u16hi));
+
+                float32x4_t f0 = vcvtq_f32_u32(u32_0);
+                float32x4_t f1 = vcvtq_f32_u32(u32_1);
+                float32x4_t f2 = vcvtq_f32_u32(u32_2);
+                float32x4_t f3 = vcvtq_f32_u32(u32_3);
+
+                vst1q_f32(dst + i + 0, f0);
+                vst1q_f32(dst + i + 4, f1);
+                vst1q_f32(dst + i + 8, f2);
+                vst1q_f32(dst + i + 12, f3);
+            }
+#endif
+            for (; i < count; ++i) dst[i] = static_cast<float>(src[i]);
+        } else {
+            for (size_t i = 0; i < count; ++i) buffer[i] = static_cast<D>(src[i]);
+        }
+        this->Reset(data.width, data.height, data.channels, buffer.data(), true);
+    }
 #endif  // INSPIRECV_BACKEND_OKCV_USE_OPENCV_IO
 }
 
@@ -145,9 +216,23 @@ void Image<D>::Write(const char *filename) const {
     config.png_compression = 9;
     config.color_order = ImageReader::ColorOrder::BGR;
 
-    bool succ = ImageReader::Write(filename, reinterpret_cast<const unsigned char *>(Data()),
-                                   Width(), Height(), Channels(), config);
-    INSPIRECV_CHECK(succ) << "Could not write file " << filename;
+    if (std::is_same<D, uint8_t>::value) {
+        bool succ = ImageReader::Write(filename, reinterpret_cast<const unsigned char*>(Data()),
+                                       Width(), Height(), Channels(), config);
+        INSPIRECV_CHECK(succ) << "Could not write file " << filename;
+    } else {
+        // convert float -> U8 with saturation
+        const size_t count = static_cast<size_t>(Width()) * Height() * Channels();
+        std::vector<unsigned char> tmp(count);
+        const D* src = Data();
+        for (size_t i = 0; i < count; ++i) {
+            double v = static_cast<double>(src[i]);
+            if (v < 0.0) v = 0.0; else if (v > 255.0) v = 255.0;
+            tmp[i] = static_cast<unsigned char>(std::floor(v + 0.5));
+        }
+        bool succ = ImageReader::Write(filename, tmp.data(), Width(), Height(), Channels(), config);
+        INSPIRECV_CHECK(succ) << "Could not write file " << filename;
+    }
 #endif  // INSPIRECV_BACKEND_OKCV_USE_OPENCV_IO
 }
 
