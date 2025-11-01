@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 project(InspireCV)
+enable_language(ASM)
 
 # == OpenCV Backend Mode ==
 # OpenCV Backend Mode:
@@ -27,6 +28,10 @@ option(INSPIRECV_BUILD_TESTS "Build tests" OFF)
 option(INSPIRECV_BUILD_SAMPLE "Build sample" OFF)
 
 option(INSPIRECV_EXPANSION_MODULE_TEST_MNN_IMGPROCESS "Optionally enable MNN image processing module test" OFF)
+
+# == StreamTask (task submodule) Options ==
+option(INSPIRECV_TASK_ENABLE_ARM_NEON "Enable ARM NEON imageprocess kernels" ON)
+option(INSPIRECV_TASK_DISABLE_TILING "Disable row tiling (force single-tile per row)" OFF)
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
@@ -86,7 +91,7 @@ endif()
 
 # Add version information
 set(INSPIRECV_VERSION_MAJOR 0)
-set(INSPIRECV_VERSION_MINOR 6)
+set(INSPIRECV_VERSION_MINOR 9)
 set(INSPIRECV_VERSION_PATCH 0)
 string(TIMESTAMP BUILD_TIMESTAMP "%Y-%m-%d")
 
@@ -142,6 +147,91 @@ include_directories(${INSPIRECV_INCLUDE_DIRS})
 include_directories(${INSPIRECV_INCLUDE_DIRS}/inspirecv)
 include_directories(${CPP_DIR})
 
+# ================= StreamTask (task submodule) =================
+# Only algorithms are built (no executables/benches here).
+set(STREAMTASK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/inspirecv/task)
+
+# IPO/LTO
+include(CheckIPOSupported)
+check_ipo_supported(RESULT st_ipo_supported OUTPUT st_ipo_error)
+
+# Generated config
+set(ST_TILE_WIDTH 256)
+set(ST_HAVE_LTO 0)
+if(st_ipo_supported)
+    set(ST_HAVE_LTO 1)
+endif()
+
+set(ST_HAVE_SSE 0)
+set(ST_HAVE_AVX2 0)
+set(ST_HAVE_NEON 0)
+set(ST_DISABLE_TILING 0)
+if(INSPIRECV_TASK_DISABLE_TILING)
+    set(ST_DISABLE_TILING 1)
+endif()
+
+# Gather active flags snapshot
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+  set(ST_ACTIVE_CXX_FLAGS "${CMAKE_CXX_FLAGS_RELEASE}")
+elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  set(ST_ACTIVE_CXX_FLAGS "${CMAKE_CXX_FLAGS_DEBUG}")
+elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+  set(ST_ACTIVE_CXX_FLAGS "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
+elseif(CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
+  set(ST_ACTIVE_CXX_FLAGS "${CMAKE_CXX_FLAGS_MINSIZEREL}")
+else()
+  set(ST_ACTIVE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+endif()
+
+# Generate config.cc into build tree
+configure_file(${STREAMTASK_DIR}/streamtask_config.cc.in
+               ${STREAMTASK_DIR}/streamtask_config.cc @ONLY)
+
+set(STREAMTASK_SOURCES
+    ${STREAMTASK_DIR}/stream_task.cc
+    ${STREAMTASK_DIR}/stream_task_utils.cc
+    ${STREAMTASK_DIR}/stream_task_kernels.cc
+    ${STREAMTASK_DIR}/matrix.cc
+    ${STREAMTASK_DIR}/cpu_features.cc
+    ${STREAMTASK_DIR}/avx2_memcpy.cc
+    ${STREAMTASK_DIR}/streamtask_config.cc
+)
+set(INSPIRECV_SRC_FILES ${INSPIRECV_SRC_FILES} ${STREAMTASK_SOURCES})
+
+# CPU feature paths
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|X86_64|AMD64|i686|i386)$")
+    message(STATUS "INSPIRECV/StreamTask: enabling x86 SSE4.1 optimizations")
+    add_compile_definitions(INSPIRECV_TASK_USE_SSE)
+    set(ST_HAVE_SSE 1)
+    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        add_compile_options(-msse4.1)
+    endif()
+    # Build AVX2 helper with specific flags
+    set_source_files_properties(${STREAMTASK_DIR}/avx2_memcpy.cc PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma")
+    set(ST_HAVE_AVX2 1)
+endif()
+
+if (INSPIRECV_TASK_ENABLE_ARM_NEON)
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)")
+        message(STATUS "INSPIRECV/StreamTask: enabling ARM64 NEON kernels")
+        add_compile_definitions(INSPIRECV_TASK_USE_NEON INSPIRECV_TASK_ENABLE_ARM_NEON)
+        set(ST_HAVE_NEON 1)
+        include_directories(${STREAMTASK_DIR}/core/asm)
+        set(ST_ARM64_ASM ${STREAMTASK_DIR}/core/asm/kernels_arm64.S)
+        set_source_files_properties(${ST_ARM64_ASM} PROPERTIES LANGUAGE ASM)
+        list(APPEND INSPIRECV_SRC_FILES ${ST_ARM64_ASM})
+    elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm|armv7|armv7l|armhf|armv8l)")
+        message(STATUS "INSPIRECV/StreamTask: enabling ARM32 NEON kernels")
+        add_compile_definitions(INSPIRECV_TASK_USE_NEON INSPIRECV_TASK_ENABLE_ARM_NEON)
+        set(ST_HAVE_NEON 1)
+        include_directories(${STREAMTASK_DIR}/core/asm)
+        set(ST_ARM32_ASM ${STREAMTASK_DIR}/core/asm/kernels_arm32.S)
+        set_source_files_properties(${ST_ARM32_ASM} PROPERTIES LANGUAGE ASM)
+        list(APPEND INSPIRECV_SRC_FILES ${ST_ARM32_ASM})
+    endif()
+endif()
+# ================= End StreamTask =================
+
 if(INSPIRECV_BACKEND STREQUAL "OKCV")
     file(GLOB_RECURSE OKCV_SRC_FILES "${OKCV_DIR}/*.cpp")
     set(INSPIRECV_SRC_FILES ${INSPIRECV_SRC_FILES} ${OKCV_SRC_FILES})
@@ -177,6 +267,16 @@ if (INSPIRECV_BUILD_SAMPLE)
     target_link_libraries(sample_morphology ${NEED_LINK_LIBS} ${EXTENSION_LIBS})
     add_executable(sample_pipeline ${CPP_DIR}/sample/sample_pipeline.cpp ${INSPIRECV_SRC_FILES})
     target_link_libraries(sample_pipeline ${NEED_LINK_LIBS} ${EXTENSION_LIBS})
+
+    # Task samples (require OpenCV macros enabled)
+    if (OpenCV_FOUND)
+        add_executable(sample_task_bench ${CPP_DIR}/sample/sample_task_bench.cpp ${INSPIRECV_SRC_FILES})
+        target_link_libraries(sample_task_bench ${NEED_LINK_LIBS} ${EXTENSION_LIBS})
+        add_executable(sample_task_bench_formats ${CPP_DIR}/sample/sample_task_bench_formats.cpp ${INSPIRECV_SRC_FILES})
+        target_link_libraries(sample_task_bench_formats ${NEED_LINK_LIBS} ${EXTENSION_LIBS})
+        add_executable(sample_task_verify ${CPP_DIR}/sample/sample_task_verify.cpp ${INSPIRECV_SRC_FILES})
+        target_link_libraries(sample_task_verify ${NEED_LINK_LIBS} ${EXTENSION_LIBS})
+    endif()
 endif()
 
 if (INSPIRECV_BUILD_TESTS)
@@ -235,3 +335,4 @@ install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/inspirecv DESTINATION include)
 if(INSPIRECV_BUILD_TESTS)
     install(TARGETS "testing" RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
 endif()
+

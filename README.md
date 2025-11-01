@@ -12,6 +12,12 @@ A lightweight computer vision library with flexible backend options.
   - Image I/O
 - Minimal dependencies when using OKCV backend
 - Optional OpenCV integration for debugging and visualization
+- Typed images: `Image` (uint8) and `ImageT<float>` (float)
+- Task (high‑performance convert/warp)
+  - Format convert: RGB/BGR/RGBA/BGRA/GRAY, HSV/XYZ/YCrCb, BGR555/BGR565
+  - YUV support: NV21/NV12/I420 → BGR/RGB/BGRA/RGBA
+  - Warp/resize: NEAREST/BILINEAR, wrap(CLAMP/ZERO)
+  - Float output with mean/normal, stride-aware; SIMD (NEON/SSE/AVX2) + multi-thread
 
 ## Build Options
 
@@ -73,6 +79,21 @@ int main() {
 }
 ```
 
+### Typed Images (uint8 and float)
+
+```cpp
+#include <inspirecv/inspirecv.h>
+
+using namespace inspirecv;
+
+// Default is uint8
+Image u8 = Image::Create("input.jpg");
+
+// Float path
+ImageT<float> fimg = ImageT<float>::Read("input.jpg");
+auto blurred = fimg.GaussianBlur(3, 1.0f);
+```
+
 ### Geometric Types
 
 ```cpp
@@ -107,6 +128,25 @@ TransformMatrix transform;
 transform.Rotate(45.0f);         // Rotate 45 degrees
 transform.Translate(10.0f, 20.0f);  // Translate
 transform.Scale(2.0f, 2.0f);     // Scale
+```
+
+### Task: fast format/warp with TransformMatrix
+
+```cpp
+#include <inspirecv/task/task.h>
+#include <inspirecv/core/transform_matrix.h>
+
+using namespace inspirecv::task;
+
+StreamTask::Config cfg; cfg.sourceFormat = BGR; cfg.destFormat = RGB; cfg.filterType = BILINEAR;
+auto proc = StreamTask::Create(cfg);
+
+inspirecv::TransformMatrix tm = inspirecv::TransformMatrix::Identity();
+proc->setMatrix(tm); 
+
+// Convert/warp from src to dst (uint8 example)
+proc->convert(srcPtr, inW, inH, /*stride*/0, dstPtr, outW, outH, /*outputBpp*/0, /*outStride*/0, halide_type_of<uint8_t>());
+StreamTask::Destroy(proc);
 ```
 
 ### Drawing Operations
@@ -186,3 +226,10 @@ try {
     std::cerr << "Error: " << e.what() << std::endl;
 }
 ```
+
+### Reference
+
+- MNN (ImageProcess): [https://github.com/alibaba/MNN](https://github.com/alibaba/MNN)
+- OpenCV: [https://github.com/opencv/opencv](https://github.com/opencv/opencv)
+- Eigen: [https://gitlab.com/libeigen/eigen](https://gitlab.com/libeigen/eigen)
+- Catch2 (unit tests only): [https://github.com/catchorg/Catch2](https://github.com/catchorg/Catch2)

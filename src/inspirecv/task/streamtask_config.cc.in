@@ -1,0 +1,48 @@
+#include <cstdio>
+#include <inspirecv/version.h>
+
+namespace inspirecv { namespace task {
+
+static BuildInfo make_build_info() {
+    BuildInfo bi;
+    bi.system_name       = "@CMAKE_SYSTEM_NAME@";
+    bi.system_processor  = "@CMAKE_SYSTEM_PROCESSOR@";
+    bi.compiler_id       = "@CMAKE_CXX_COMPILER_ID@";
+    bi.compiler_version  = "@CMAKE_CXX_COMPILER_VERSION@";
+    bi.build_type        = "@CMAKE_BUILD_TYPE@";
+    bi.cxx_standard      = @CMAKE_CXX_STANDARD@;
+    bi.have_lto          = (@ST_HAVE_LTO@ != 0);
+    bi.have_sse          = (@ST_HAVE_SSE@ != 0);
+    bi.have_avx2         = (@ST_HAVE_AVX2@ != 0);
+    bi.have_neon         = (@ST_HAVE_NEON@ != 0);
+    bi.tiling_disabled   = (@ST_DISABLE_TILING@ != 0);
+    bi.tile_width        = @ST_TILE_WIDTH@;
+    bi.active_cxx_flags  = "@ST_ACTIVE_CXX_FLAGS@";
+    return bi;
+}
+
+const BuildInfo& GetBuildInfo() {
+    static BuildInfo kInfo = make_build_info();
+    return kInfo;
+}
+
+void PrintBuildInfo() {
+    const BuildInfo& b = GetBuildInfo();
+    std::printf("StreamTask build info:\n");
+    std::printf("  System     : %s (%s)\n", b.system_name, b.system_processor);
+    std::printf("  Compiler   : %s %s (C++%d)\n", b.compiler_id, b.compiler_version, b.cxx_standard);
+    std::printf("  BuildType  : %s\n", b.build_type);
+    std::printf("  LTO        : %s\n", b.have_lto ? "ON" : "OFF");
+    std::printf("  SSE        : %s\n", b.have_sse ? "ON" : "OFF");
+    std::printf("  AVX2       : %s\n", b.have_avx2 ? "ON" : "OFF");
+    std::printf("  NEON       : %s\n", b.have_neon ? "ON" : "OFF");
+    std::printf("  TilingOff  : %s\n", b.tiling_disabled ? "YES" : "NO");
+    std::printf("  TileWidth  : %d\n", b.tile_width);
+    if (b.active_cxx_flags && b.active_cxx_flags[0]) {
+        std::printf("  CXXFlags   : %s\n", b.active_cxx_flags);
+    }
+}
+
+}} // namespace inspirecv::task
+
+

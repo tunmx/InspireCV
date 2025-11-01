@@ -1,0 +1,18 @@
+#ifndef INSPIRECV_STREAMTASK_CORE_ERROR_CODE_H_
+#define INSPIRECV_STREAMTASK_CORE_ERROR_CODE_H_
+
+namespace inspirecv {
+enum TaskStatus {
+    SUCCESS            = 0,
+    INPUT_DATA_ERROR   = 1,
+    UNSUPPORTED_SAMPLER         = 2,
+    UNSUPPORTED_CONVERSION      = 3,
+    UNSUPPORTED_FLOAT_CONVERSION= 4,
+};
+}
+
+#endif // INSPIRECV_STREAMTASK_CORE_ERROR_CODE_H_
+
+
+
+
