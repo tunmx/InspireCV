@@ -1,0 +1,7 @@
+family,operation,type,channels,source_width,source_height,destination_width,destination_height,timing_scope,contract,no_neon_p50_us,no_neon_p95_us,neon_p50_us,neon_p95_us,neon_speedup,accuracy,max_abs_error
+task,identity_bgr_to_rgb_f32_chw,u8_to_f32,3,112,112,112,112,preallocated_end_to_end,aligned,3.750,4.209,4.000,4.125,0.9375,exact,0.0000000
+task,identity_bgr_to_rgb_f32_chw,u8_to_f32,3,224,224,224,224,preallocated_end_to_end,aligned,14.041,16.333,15.333,16.584,0.9157,exact,0.0000000
+task,identity_bgr_to_rgb_f32_chw,u8_to_f32,3,640,640,640,640,preallocated_end_to_end,aligned,117.625,221.292,126.541,165.542,0.9295,exact,0.0000000
+task,identity_bgr_to_rgb_f32_hwc,u8_to_f32,3,224,224,224,224,preallocated_end_to_end,aligned,15.542,16.417,17.292,18.208,0.8988,exact,0.0000000
+task,resize_bgr_to_rgb_f32_chw,u8_to_f32,3,640,480,112,112,preallocated_end_to_end,different,71.834,87.542,71.583,75.333,1.0035,different_contract,1.7031250
+task,resize_bgr_to_rgb_f32_chw,u8_to_f32,3,1920,1080,224,224,preallocated_end_to_end,different,288.458,323.167,292.500,347.583,0.9862,different_contract,1.8828125

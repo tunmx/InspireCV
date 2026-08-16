@@ -1,0 +1,45 @@
+# benchmark=inspirecv_vs_opencv_cpu
+# machine=ryzen5_5600_cpu2_sse41_repeat3
+# inspirecv=InspireCV v1.0.1@General - Build Time: 2026-08-16
+# opencv=4.6.0
+# compiler=GNU 11.4.0
+# build_type=Release
+# neon=0
+# sse=1
+# avx2_objects=1
+# opencv_threads_requested=1
+# opencv_threads_reported=1
+# opencv_optimized=1
+# samples=101
+# warmups=10
+family,operation,type,channels,source_width,source_height,destination_width,destination_height,timing_scope,contract,tolerance,inspirecv_p50_us,inspirecv_p95_us,opencv_p50_us,opencv_p95_us,inspirecv_speedup,winner,elements,mismatches,max_abs_error,mean_abs_error,accuracy
+image,resize_nearest,u8,3,128,128,256,256,public_api_allocation,aligned,0,187.330,224.700,78.797,114.133,0.4206,opencv,196608,0,0.0000000,0.0000000,exact
+image,resize_linear,u8,3,128,128,256,256,public_api_allocation,different,0.0000000,458.336,557.892,59.051,92.432,0.1288,opencv,196608,194297,104.0000000,25.0574646,different_contract
+image,resize_nearest,u8,3,512,512,256,256,public_api_allocation,aligned,0.0000000,46.868,46.928,56.064,58.480,1.1962,inspirecv,196608,0,0.0000000,0.0000000,exact
+image,resize_linear,u8,3,512,512,256,256,public_api_allocation,different,0.0000000,446.533,450.051,58.669,61.535,0.1314,opencv,196608,195574,184.0000000,53.2966207,different_contract
+image,resize_nearest,u8,3,1920,1080,224,224,public_api_allocation,different,0.0000000,38.082,38.241,47.599,47.840,1.2499,inspirecv,150528,668,254.0000000,0.3876355,different_contract
+image,resize_linear,u8,3,1920,1080,224,224,public_api_allocation,different,0.0000000,343.712,347.068,94.286,97.542,0.2743,opencv,150528,149659,238.0000000,56.1923164,different_contract
+image,resize_nearest,u8,3,1920,1080,3840,2160,public_api_allocation,aligned,0.0000000,17193.539,19495.377,14776.347,14911.369,0.8594,opencv,24883200,0,0.0000000,0.0000000,exact
+image,resize_linear,u8,3,1920,1080,3840,2160,public_api_allocation,different,0.0000000,56582.945,57175.808,6889.833,6916.692,0.1218,opencv,24883200,24594370,110.0000000,25.0970727,different_contract
+image,rotate90,u8,3,512,512,512,512,public_api_allocation,aligned,0.0000000,952.668,954.733,281.746,285.152,0.2957,opencv,786432,0,0.0000000,0.0000000,exact
+image,flip_horizontal,u8,3,512,512,512,512,public_api_allocation,aligned,0.0000000,951.817,953.039,157.263,160.330,0.1652,opencv,786432,0,0.0000000,0.0000000,exact
+image,swap_rb,u8,3,512,512,512,512,public_api_allocation,aligned,0.0000000,231.843,235.069,22.211,22.321,0.0958,opencv,786432,0,0.0000000,0.0000000,exact
+image,to_gray,u8,3,512,512,512,512,public_api_allocation,aligned,1.0000000,545.158,556.238,71.734,74.650,0.1316,opencv,262144,323,1.0000000,0.0012321,within_tolerance
+image,rotate90,u8,3,1920,1080,1080,1920,public_api_allocation,aligned,0.0000000,7056.753,7067.533,2223.842,2232.067,0.3151,opencv,6220800,0,0.0000000,0.0000000,exact
+image,flip_horizontal,u8,3,1920,1080,1920,1080,public_api_allocation,aligned,0.0000000,7513.386,7523.215,1247.398,1251.126,0.1660,opencv,6220800,0,0.0000000,0.0000000,exact
+image,swap_rb,u8,3,1920,1080,1920,1080,public_api_allocation,aligned,0.0000000,1837.931,1840.936,170.588,173.895,0.0928,opencv,6220800,0,0.0000000,0.0000000,exact
+image,to_gray,u8,3,1920,1080,1920,1080,public_api_allocation,aligned,1.0000000,4283.106,4367.784,562.810,564.013,0.1314,opencv,2073600,2642,1.0000000,0.0012741,within_tolerance
+image,threshold,u8,1,512,512,512,512,public_api_allocation,aligned,0.0000000,5.120,5.209,7.864,7.925,1.5359,inspirecv,262144,0,0.0000000,0.0000000,exact
+image,gaussian5,u8,1,512,512,512,512,public_api_allocation,different,0.0000000,1233.193,1549.954,125.835,129.261,0.1020,opencv,262144,157576,4.0000000,0.7222443,different_contract
+image,erode3,u8,1,512,512,512,512,public_api_allocation,aligned,0.0000000,1165.195,1171.858,25.177,25.818,0.0216,opencv,262144,0,0.0000000,0.0000000,exact
+image,threshold,u8,1,1920,1080,1920,1080,public_api_allocation,aligned,0.0000000,36.147,43.642,59.270,62.697,1.6397,inspirecv,2073600,0,0.0000000,0.0000000,exact
+image,gaussian5,u8,1,1920,1080,1920,1080,public_api_allocation,different,0.0000000,5545.152,5623.637,852.422,913.145,0.1537,opencv,2073600,1247180,4.0000000,0.7239815,different_contract
+image,erode3,u8,1,1920,1080,1920,1080,public_api_allocation,aligned,0.0000000,9214.571,9242.233,125.334,127.689,0.0136,opencv,2073600,0,0.0000000,0.0000000,exact
+image,warp_affine_linear,u8,3,512,512,512,512,public_api_allocation,different,0.0000000,4530.377,4565.613,874.642,883.009,0.1931,opencv,786432,452554,232.0000000,0.9992231,different_contract
+image,warp_affine_linear,u8,3,1920,1080,1920,1080,public_api_allocation,different,0.0000000,35756.347,35787.405,6857.190,6868.000,0.1918,opencv,6220800,3509170,249.0000000,0.8463014,different_contract
+task,identity_bgr_to_rgb_f32_chw,u8_to_f32,3,112,112,112,112,preallocated_end_to_end,aligned,0.0000010,18.985,19.186,12.974,13.114,0.6834,opencv,37632,0,0.0000000,0.0000000,exact
+task,identity_bgr_to_rgb_f32_chw,u8_to_f32,3,224,224,224,224,preallocated_end_to_end,aligned,0.0000010,75.892,78.827,98.184,101.800,1.2937,inspirecv,150528,0,0.0000000,0.0000000,exact
+task,identity_bgr_to_rgb_f32_chw,u8_to_f32,3,640,640,640,640,preallocated_end_to_end,aligned,0.0000010,626.960,630.137,560.256,566.939,0.8936,opencv,1228800,0,0.0000000,0.0000000,exact
+task,identity_bgr_to_rgb_f32_hwc,u8_to_f32,3,224,224,224,224,preallocated_end_to_end,aligned,0.0000010,24.717,24.806,14.397,14.537,0.5825,opencv,150528,0,0.0000000,0.0000000,exact
+task,resize_bgr_to_rgb_f32_chw,u8_to_f32,3,640,480,112,112,preallocated_end_to_end,different,0.0000000,172.963,176.159,38.542,39.073,0.2228,opencv,37632,37416,1.7031250,0.4440609,different_contract
+task,resize_bgr_to_rgb_f32_chw,u8_to_f32,3,1920,1080,224,224,preallocated_end_to_end,different,0.0000000,683.717,685.089,190.085,194.233,0.2780,opencv,150528,149716,1.8828125,0.4385293,different_contract

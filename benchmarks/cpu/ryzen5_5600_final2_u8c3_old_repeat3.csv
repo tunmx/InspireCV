@@ -1,0 +1,47 @@
+# benchmark=inspirecv_vs_opencv_cpu
+# machine=ryzen5_5600_final_avx2
+# inspirecv=InspireCV v1.0.1@General - Build Time: 2026-08-16
+# opencv=5.0.0
+# compiler=GNU 11.4.0
+# build_type=Release
+# neon=0
+# sse=1
+# avx2_objects=1
+# opencv_threads_requested=1
+# opencv_threads_reported=1
+# opencv_thread_control_honored=1
+# opencv_optimized=1
+# suite=u8c3
+# samples=101
+# warmups=10
+family,operation,type,channels,source_width,source_height,destination_width,destination_height,timing_scope,contract,tolerance,inspirecv_p50_us,inspirecv_p95_us,opencv_p50_us,opencv_p95_us,inspirecv_speedup,winner,elements,mismatches,max_abs_error,mean_abs_error,accuracy
+image,rotate90,u8,3,16,16,16,16,public_api_allocation,aligned,0,1.022,1.032,0.521,0.531,0.5098,opencv,768,0,0.0000000,0.0000000,exact
+image,flip_horizontal,u8,3,16,16,16,16,public_api_allocation,aligned,0.0000000,0.952,0.952,0.321,0.340,0.3372,opencv,768,0,0.0000000,0.0000000,exact
+image,swap_rb,u8,3,16,16,16,16,public_api_allocation,aligned,0.0000000,0.281,0.281,0.421,0.431,1.4982,inspirecv,768,0,0.0000000,0.0000000,exact
+image,rotate90,u8,3,32,32,32,32,public_api_allocation,aligned,0.0000000,3.958,3.978,1.723,1.764,0.4353,opencv,3072,0,0.0000000,0.0000000,exact
+image,flip_horizontal,u8,3,32,32,32,32,public_api_allocation,aligned,0.0000000,3.707,3.718,1.262,1.302,0.3404,opencv,3072,0,0.0000000,0.0000000,exact
+image,swap_rb,u8,3,32,32,32,32,public_api_allocation,aligned,0.0000000,0.971,0.982,0.401,0.411,0.4130,opencv,3072,0,0.0000000,0.0000000,exact
+image,rotate90,u8,3,64,64,64,64,public_api_allocation,aligned,0.0000000,15.180,15.210,6.001,6.071,0.3953,opencv,12288,0,0.0000000,0.0000000,exact
+image,flip_horizontal,u8,3,64,64,64,64,public_api_allocation,aligned,0.0000000,14.297,14.317,4.438,4.489,0.3104,opencv,12288,0,0.0000000,0.0000000,exact
+image,swap_rb,u8,3,64,64,64,64,public_api_allocation,aligned,0.0000000,3.627,3.657,0.992,1.022,0.2735,opencv,12288,0,0.0000000,0.0000000,exact
+image,rotate90,u8,3,112,112,112,112,public_api_allocation,aligned,0.0000000,45.928,48.242,16.962,17.062,0.3693,opencv,37632,0,0.0000000,0.0000000,exact
+image,flip_horizontal,u8,3,112,112,112,112,public_api_allocation,aligned,0.0000000,43.053,43.093,12.233,12.284,0.2841,opencv,37632,0,0.0000000,0.0000000,exact
+image,swap_rb,u8,3,112,112,112,112,public_api_allocation,aligned,0.0000000,11.072,11.141,2.214,2.254,0.2000,opencv,37632,0,0.0000000,0.0000000,exact
+image,rotate90,u8,3,224,224,224,224,public_api_allocation,aligned,0.0000000,232.495,238.307,78.560,79.322,0.3379,opencv,150528,0,0.0000000,0.0000000,exact
+image,flip_horizontal,u8,3,224,224,224,224,public_api_allocation,aligned,0.0000000,159.666,162.191,51.949,52.371,0.3254,opencv,150528,0,0.0000000,0.0000000,exact
+image,swap_rb,u8,3,224,224,224,224,public_api_allocation,aligned,0.0000000,44.325,44.625,4.849,4.929,0.1094,opencv,150528,0,0.0000000,0.0000000,exact
+image,rotate90,u8,3,512,512,512,512,public_api_allocation,aligned,0.0000000,1202.996,1229.317,602.515,609.278,0.5008,opencv,786432,0,0.0000000,0.0000000,exact
+image,flip_horizontal,u8,3,512,512,512,512,public_api_allocation,aligned,0.0000000,833.728,834.710,273.264,277.442,0.3278,opencv,786432,0,0.0000000,0.0000000,exact
+image,swap_rb,u8,3,512,512,512,512,public_api_allocation,aligned,0.0000000,232.044,235.060,22.193,22.403,0.0956,opencv,786432,0,0.0000000,0.0000000,exact
+image,rotate90,u8,3,640,480,480,640,public_api_allocation,aligned,0.0000000,1408.480,1432.767,703.338,709.810,0.4994,opencv,921600,0,0.0000000,0.0000000,exact
+image,flip_horizontal,u8,3,640,480,640,480,public_api_allocation,aligned,0.0000000,976.381,977.834,321.215,325.674,0.3290,opencv,921600,0,0.0000000,0.0000000,exact
+image,swap_rb,u8,3,640,480,640,480,public_api_allocation,aligned,0.0000000,271.490,274.526,25.829,26.060,0.0951,opencv,921600,0,0.0000000,0.0000000,exact
+image,rotate90,u8,3,1280,720,720,1280,public_api_allocation,aligned,0.0000000,4186.555,4295.122,2210.486,2222.119,0.5280,opencv,2764800,0,0.0000000,0.0000000,exact
+image,flip_horizontal,u8,3,1280,720,1280,720,public_api_allocation,aligned,0.0000000,2923.614,2926.059,958.848,963.437,0.3280,opencv,2764800,0,0.0000000,0.0000000,exact
+image,swap_rb,u8,3,1280,720,1280,720,public_api_allocation,aligned,0.0000000,815.433,817.707,75.755,78.700,0.0929,opencv,2764800,0,0.0000000,0.0000000,exact
+image,rotate90,u8,3,1920,1080,1080,1920,public_api_allocation,aligned,0.0000000,9511.790,9795.854,5137.166,5173.025,0.5401,opencv,6220800,0,0.0000000,0.0000000,exact
+image,flip_horizontal,u8,3,1920,1080,1920,1080,public_api_allocation,aligned,0.0000000,6576.033,6587.134,2164.609,2174.217,0.3292,opencv,6220800,0,0.0000000,0.0000000,exact
+image,swap_rb,u8,3,1920,1080,1920,1080,public_api_allocation,aligned,0.0000000,1837.622,1840.437,180.005,183.342,0.0980,opencv,6220800,0,0.0000000,0.0000000,exact
+image,rotate90,u8,3,3840,2160,2160,3840,public_api_allocation,aligned,0.0000000,43524.102,45305.802,25693.065,26549.210,0.5903,opencv,24883200,0,0.0000000,0.0000000,exact
+image,flip_horizontal,u8,3,3840,2160,3840,2160,public_api_allocation,aligned,0.0000000,26428.689,26491.639,9159.828,9209.593,0.3466,opencv,24883200,0,0.0000000,0.0000000,exact
+image,swap_rb,u8,3,3840,2160,3840,2160,public_api_allocation,aligned,0.0000000,7352.283,7367.943,1547.845,1583.533,0.2105,opencv,24883200,0,0.0000000,0.0000000,exact

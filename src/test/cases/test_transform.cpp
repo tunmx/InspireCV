@@ -105,4 +105,21 @@ TEST_CASE("test_transform", "[transform]") {
             REQUIRE_NEAR_ARRAY(transform.Squeeze(), expect_mat.Squeeze(), 0.001f);
         }
     }
+
+
+    SECTION("non-five-point input") {
+        std::vector<inspirecv::Point2f> src = {
+          {0.0f, 0.0f}, {2.0f, 0.0f}, {0.0f, 2.0f}};
+        std::vector<inspirecv::Point2f> dst = {
+          {3.0f, -4.0f}, {7.0f, -4.0f}, {3.0f, 0.0f}};
+
+        const auto transform =
+          inspirecv::SimilarityTransformEstimateUmeyama(src, dst);
+        const auto mapped = inspirecv::ApplyTransformToPoints(dst, transform);
+        REQUIRE(mapped.size() == src.size());
+        for (std::size_t i = 0; i < src.size(); ++i) {
+            REQUIRE(mapped[i].GetX() == Approx(src[i].GetX()).margin(1e-4f));
+            REQUIRE(mapped[i].GetY() == Approx(src[i].GetY()).margin(1e-4f));
+        }
+    }
 }

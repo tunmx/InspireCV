@@ -5,6 +5,7 @@
 #include "logging.h"
 #include "version.h"
 #include "time_spend.h"
+#include "acceleration.h"
 
 #include "core/define.h"
 #include "core/point.h"
@@ -13,5 +14,7 @@
 #include "core/transform_matrix.h"
 #include "core/image.h"
 #include "core/color.h"
+
+#include "cuda/image.h"
 
 #endif  // INSPIRECV_INSPIRECV_H

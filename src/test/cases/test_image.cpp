@@ -1,6 +1,80 @@
 #include "../common/common.h"
 #include <inspirecv/inspirecv.h>
 
+TEST_CASE("test_image_construction_reset_u8", "[basic]") {
+    using inspirecv::Image;
+    SECTION("default empty and reset") {
+        auto img = Image::Create();
+        REQUIRE(img.Empty());
+        REQUIRE(img.Width() == 0);
+        REQUIRE(img.Height() == 0);
+        REQUIRE(img.Channels() == 0);
+        img.Reset(3, 2, 1);
+        REQUIRE_FALSE(img.Empty());
+        REQUIRE(img.Width() == 3);
+        REQUIRE(img.Height() == 2);
+        REQUIRE(img.Channels() == 1);
+    }
+    SECTION("factory create with/without data") {
+        auto a = Image::Create(4, 1, 1);
+        a.Fill(0);
+        for (int i = 0; i < 4; ++i) REQUIRE(a.Data()[i] == 0);
+        uint8_t v[] = {1,2,3,4};
+        auto b = Image::Create(4, 1, 1, v);
+        REQUIRE_EQ_C_ARRAY(b.Data(), v, 4);
+        auto c = b.Clone();
+        REQUIRE_EQ_C_ARRAY(c.Data(), v, 4);
+    }
+}
+
+TEST_CASE("test_resize_nearest_u8_3ch", "[resize]") {
+    using inspirecv::Image;
+    // 2x2, 3ch BGR
+    uint8_t src[] = {
+        1,2,3,   4,5,6,
+        7,8,9,   10,11,12
+    };
+    auto img = Image::Create(2, 2, 3, src);
+    auto up = img.Resize(4, 4, /*use_linear=*/false); // nearest
+    REQUIRE(up.Width() == 4);
+    REQUIRE(up.Height() == 4);
+    REQUIRE(up.Channels() == 3);
+    auto at_src = [&](int y, int x, int c)->uint8_t {
+        return src[(y * 2 + x) * 3 + c];
+    };
+    auto at_dst = [&](int y, int x, int c)->uint8_t {
+        return up.Data()[(y * 4 + x) * 3 + c];
+    };
+    for (int y = 0; y < 4; ++y) {
+        for (int x = 0; x < 4; ++x) {
+            int sy = y / 2, sx = x / 2;
+            for (int c = 0; c < 3; ++c) {
+                REQUIRE(at_dst(y, x, c) == at_src(sy, sx, c));
+            }
+        }
+    }
+}
+
+TEST_CASE("test_warp_affine_rotate90_matches_api_u8", "[warp][rotate]") {
+    using inspirecv::Image;
+    using inspirecv::TransformMatrix;
+    // 2x3, 3ch
+    uint8_t data[] = {
+        1,2,3, 4,5,6,
+        7,8,9, 10,11,12,
+        13,14,15, 16,17,18
+    };
+    auto img = Image::Create(2, 3, 3, data);
+    auto r90 = img.Rotate90();
+    // WarpAffine expects matrix mapping dst(x,y)->src(sx,sy):
+    // For 90° clockwise: sx = y, sy = (H-1) - x  ⇒  [0 1 0; -1 0 H-1]
+    auto M = TransformMatrix::Create(0.f, 1.f, 0.f, -1.f, 0.f, static_cast<float>(img.Height() - 1));
+    auto wa = img.WarpAffine(M, img.Height(), img.Width()); // dims swapped (H,W)
+    REQUIRE(wa.Width() == r90.Width());
+    REQUIRE(wa.Height() == r90.Height());
+    REQUIRE_EQ_C_ARRAY(wa.Data(), r90.Data(), r90.Width() * r90.Height() * r90.Channels());
+}
+
 TEST_CASE("test_image_basic_operations", "[basic]") {
     SECTION("Test image creation and data access") {
         // 2 * 3 * 3

@@ -1,26 +1,20 @@
 #!/bin/bash
+set -euo pipefail
 
-# Get build directory from first argument, default to "build" if not provided
-BUILD_DIR="${1:-build}"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BUILD_DIR="${1:-${PROJECT_DIR}/build}"
+mkdir -p "${BUILD_DIR}"
+BUILD_DIR="$(cd "${BUILD_DIR}" && pwd)"
 
-# Create build directory if it doesn't exist
-echo "Creating directory: $BUILD_DIR"
-mkdir -p "$BUILD_DIR"
+echo "Configuring InspireCV in ${BUILD_DIR}"
+cmake -S "${PROJECT_DIR}" -B "${BUILD_DIR}" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX="${BUILD_DIR}/install"
 
-# Go to build directory
-echo "Changing to directory: $BUILD_DIR"
-cd "$BUILD_DIR" || { echo "Failed to change to directory: $BUILD_DIR"; exit 1; }
+echo "Building InspireCV"
+cmake --build "${BUILD_DIR}" --config Release --parallel
 
-# Configure CMake in Release mode
-echo "Configuring CMake..."
-cmake -DCMAKE_BUILD_TYPE=Release .. || { echo "CMake configuration failed"; exit 1; }
+echo "Installing InspireCV to ${BUILD_DIR}/install"
+cmake --install "${BUILD_DIR}" --config Release
 
-# Build using all available cores
-echo "Building..."
-make -j"$(nproc)" || { echo "Build failed"; exit 1; }
-
-# Install
-echo "Installing..."
-make install || { echo "Installation failed"; exit 1; }
-
-echo "Build process completed successfully in directory: $BUILD_DIR"
+echo "Build completed successfully"

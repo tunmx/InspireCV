@@ -1,0 +1,27 @@
+gpu,compute_capability,cuda_runtime,cuda_driver,cpu,operation,element_type,channels,source_width,source_height,destination_width,destination_height,samples,cpu_p50_us,cpu_p95_us,cuda_p50_us,cuda_p95_us,p50_speedup,recommendation,accuracy
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,u8,3,64,64,48,48,101,1.402,1.533,10.308,11.811,0.136,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,u8,3,96,96,72,72,101,2.855,2.875,20.627,21.409,0.138,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,u8,3,128,128,96,96,101,4.869,4.899,22.410,23.392,0.217,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,u8,3,192,192,144,144,101,11.240,11.280,38.949,39.681,0.289,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,u8,3,256,256,192,192,101,19.305,19.385,51.833,54.918,0.372,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,u8,3,384,384,288,288,101,43.538,43.848,84.511,87.886,0.515,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,u8,3,512,512,384,384,101,75.755,78.460,142.063,144.778,0.533,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,u8,3,768,768,576,576,101,168.170,173.920,269.891,273.688,0.623,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,u8,3,1024,1024,768,768,101,296.939,301.107,441.217,447.087,0.673,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,u8,3,1280,720,960,540,101,259.693,263.069,397.870,400.965,0.653,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,u8,3,1920,1080,1440,810,101,1730.807,1738.640,824.139,829.739,2.100,cuda,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,u8,3,2560,1440,1920,1080,101,3070.967,3080.604,1422.808,1428.468,2.158,cuda,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,u8,3,3840,2160,2880,1620,101,7294.771,7336.326,3176.115,3198.384,2.297,cuda,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,f32,3,64,64,48,48,101,6.621,6.642,22.320,22.640,0.297,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,f32,3,96,96,72,72,101,14.536,14.556,30.825,38.759,0.472,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,f32,3,128,128,96,96,101,25.636,25.686,47.695,48.908,0.537,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,f32,3,192,192,144,144,101,57.303,60.238,84.380,85.803,0.679,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,f32,3,256,256,192,192,101,101.391,104.326,138.798,140.771,0.730,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,f32,3,384,384,288,288,101,226.975,230.471,260.775,263.971,0.870,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,f32,3,512,512,384,384,101,402.307,406.255,433.303,438.102,0.928,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,f32,3,768,768,576,576,101,906.277,908.661,903.401,907.258,1.003,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,f32,3,1024,1024,768,768,101,1610.112,1613.308,1567.757,1578.475,1.027,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,f32,3,1280,720,960,540,101,1413.922,1419.162,1389.489,1396.381,1.018,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,f32,3,1920,1080,1440,810,101,3196.372,3206.510,3089.211,3120.567,1.035,cpu,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,f32,3,2560,1440,1920,1080,101,14521.932,14554.980,6094.746,6132.964,2.383,cuda,bit_exact
+"NVIDIA GeForce RTX 3060",8.6,12020,12040,"AMD Ryzen 5 5600 6-Core Processor",resize_nearest,f32,3,3840,2160,2880,1620,101,32759.759,32823.073,36481.487,37460.944,0.898,cpu,bit_exact

@@ -2,6 +2,7 @@
 #define INSPIRECV_DEFINE_H
 
 #include <array>
+#include <cstddef>
 
 #ifndef INSPIRECV_API
 #define INSPIRECV_API
@@ -9,7 +10,7 @@
 
 namespace inspirecv {
 
-template <typename T, size_t N>
+template <typename T, std::size_t N>
 using Vec = std::array<T, N>;
 
 template <typename T>

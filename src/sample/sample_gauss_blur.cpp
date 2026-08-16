@@ -1,12 +1,12 @@
 #include <iostream>
 #include <inspirecv/inspirecv.h>
-// #include <inspirecv/okcv/io/stb_warpper.h>
+// #include <inspirecv/backends/okcv/io/stb_wrapper.h>
 
 int main() {
-    inspirecv::Image image = inspirecv::Image::Create();
-    image.Read("../images/fake_diff_after.jpg");
+    inspirecv::ImageT<float> image = inspirecv::ImageT<float>::Create();
+    image.Read("../images/kun.jpg");
 
-    inspirecv::Image blurred;
+    inspirecv::ImageT<float> blurred;
     inspirecv::TimeSpend ts(inspirecv::GetCVBackend());
     for (int i = 0; i < 100; ++i) {  
         ts.Start();
