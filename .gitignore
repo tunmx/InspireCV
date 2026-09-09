@@ -27,7 +27,10 @@ docs/
 benchmark/
 !src/benchmark/
 !src/benchmark/cpu_backend_benchmark.cpp
+!scripts/benchmark/
 artifacts/*
+.benchmark-deps/
+benchmark-results/
 build*/
 command/benchmark.txt
 command/image_benchmark.txt

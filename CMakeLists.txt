@@ -75,6 +75,13 @@ endif()
 
 set(NEED_LINK_LIBS "")
 
+# logging.cpp writes to logcat on Android. Keep the platform library on the
+# target's public link interface so static and object-library consumers do not
+# need to rediscover this implementation dependency.
+if(ANDROID)
+    list(APPEND NEED_LINK_LIBS log)
+endif()
+
 if(INSPIRECV_ENABLE_CUDA)
     if(CMAKE_VERSION VERSION_LESS 3.18)
         message(FATAL_ERROR
