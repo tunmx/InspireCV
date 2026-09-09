@@ -2,6 +2,7 @@
 """Compare Image benchmark throughput using alternating repeated runs."""
 
 import argparse
+import json
 import math
 import os
 import re
@@ -9,6 +10,7 @@ import statistics
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 
 ROW_PATTERN = re.compile(
@@ -24,6 +26,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--candidate", required=True, type=Path)
     parser.add_argument("--images-dir", required=True, type=Path)
     parser.add_argument("--filter", default="[bench][image]")
+    parser.add_argument("--output-dir", type=Path,
+                        help="retain each raw report and its parsed throughput values")
     parser.add_argument("--runs", type=int, default=7)
     parser.add_argument("--max-case-regression", type=float, default=0.05)
     parser.add_argument("--max-overall-regression", type=float, default=0.02)
@@ -31,10 +35,13 @@ def parse_arguments() -> argparse.Namespace:
 
 
 def run_benchmark(binary: Path, test_filter: str,
-                  images_dir: Path) -> dict[str, float]:
+                  images_dir: Path, report_prefix: Optional[Path] = None) -> dict[str, float]:
     with tempfile.TemporaryDirectory(prefix="inspirecv-image-perf-") as directory:
         environment = os.environ.copy()
         environment["INSPIRECV_IMAGES_DIR"] = str(images_dir)
+        # PNG encoding between cases changes allocator/cache/thermal state;
+        # visual reports belong in a separate correctness run, not this gate.
+        environment["INSPIRECV_IMAGE_BENCHMARK_SAVE_IMAGES"] = "0"
         subprocess.run(
             [str(binary), test_filter], cwd=directory, env=environment,
             check=True, text=True, stdout=subprocess.DEVNULL,
@@ -44,10 +51,16 @@ def run_benchmark(binary: Path, test_filter: str,
         if not report.is_file():
             raise RuntimeError(f"image benchmark report missing for {binary}")
         measurements = {}
+        contents = report.read_text(encoding="utf-8")
         for dtype, operation, input_size, output_size, loops, _, _, throughput in \
-                ROW_PATTERN.findall(report.read_text(encoding="utf-8")):
+                ROW_PATTERN.findall(contents):
             key = "/".join((dtype, operation, input_size, output_size, loops))
             measurements[key] = float(throughput)
+        if report_prefix is not None:
+            with report_prefix.with_suffix(".txt").open("x", encoding="utf-8") as stream:
+                stream.write(contents)
+            with report_prefix.with_suffix(".json").open("x", encoding="utf-8") as stream:
+                json.dump(measurements, stream, indent=2, sort_keys=True)
     if not measurements:
         raise RuntimeError(f"no image benchmark rows found for {binary}")
     return measurements
@@ -60,6 +73,8 @@ def main() -> int:
     baseline = arguments.baseline.resolve(strict=True)
     candidate = arguments.candidate.resolve(strict=True)
     images_dir = arguments.images_dir.resolve(strict=True)
+    if arguments.output_dir is not None:
+        arguments.output_dir.mkdir(parents=True, exist_ok=False)
     samples = ({}, {})
 
     def append(target: dict[str, list[float]], values: dict[str, float]) -> None:
@@ -67,11 +82,14 @@ def main() -> int:
             target.setdefault(key, []).append(value)
 
     for run_index in range(arguments.runs):
-        order = ((baseline, samples[0]), (candidate, samples[1]))
+        order = ((baseline, samples[0], "baseline"), (candidate, samples[1], "candidate"))
         if run_index % 2:
             order = tuple(reversed(order))
-        for binary, target in order:
-            append(target, run_benchmark(binary, arguments.filter, images_dir))
+        for binary, target, label in order:
+            prefix = (arguments.output_dir / f"{label}-{run_index:02d}"
+                      if arguments.output_dir is not None else None)
+            append(target, run_benchmark(binary, arguments.filter, images_dir, prefix))
+        print(f"round {run_index + 1}/{arguments.runs} complete", flush=True)
 
     if samples[0].keys() != samples[1].keys():
         raise RuntimeError("baseline and candidate benchmark rows differ")

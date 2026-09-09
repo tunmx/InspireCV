@@ -81,6 +81,17 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C ${{ env.BUILD_TYPE }} --output-on-failure
 
+      - name: Upload test diagnostics
+        if: ${{ always() && runner.os != 'Windows' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-diagnostics-${{ matrix.os }}-${{ matrix.library }}
+          path: |
+            build/Testing/Temporary/
+            build/CMakeCache.txt
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Install
         shell: bash
         run: cmake --install build --config "$BUILD_TYPE" --prefix "$PWD/build/install"
@@ -116,6 +127,7 @@ jobs:
         run: cmake --build build-sanitized --parallel
 
       - name: Test
+        shell: bash
         env:
           ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:check_initialization_order=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
@@ -123,6 +135,19 @@ jobs:
           INSPIRECV_GT_DIR: ${{ github.workspace }}/images/task_gt
         # Sanitizer instrumentation changes exact floating-point bit patterns.
         # The normal matrix covers that contract in uninstrumented Release jobs.
-        run: >-
-          ./build-sanitized/inspirecv_tests
-          '~[benchmark]~[bench]~[numeric-bit-contract]'
+        run: |
+          set -o pipefail
+          ./build-sanitized/inspirecv_tests \
+            '~[benchmark]~[bench]~[numeric-bit-contract]' \
+            2>&1 | tee build-sanitized/test-output.log
+
+      - name: Upload sanitizer diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-diagnostics-sanitizers
+          path: |
+            build-sanitized/test-output.log
+            build-sanitized/CMakeCache.txt
+          if-no-files-found: warn
+          retention-days: 14

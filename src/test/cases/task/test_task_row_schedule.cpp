@@ -71,3 +71,23 @@ TEST_CASE("task_row_schedule_freezes_visible_span_and_coordinate_step",
         RequirePointBits(hidden.step, 1.0f, 0.0f);
     }
 }
+
+TEST_CASE("task_row_schedule_division_preserves_exact_affine_steps",
+          "[task][row-schedule][kernel-contract][regression]") {
+    using namespace inspirecv::task;
+    Matrix transform;
+    Matrix inverse;
+    for (float scale : {1.0f, 0.5f, 1.25f, -0.75f}) {
+        transform.setScaleTranslate(scale, scale, 3.0f, -2.0f);
+        REQUIRE(transform.invert(&inverse));
+        for (int count = 1; count <= 1024; ++count) {
+            const auto row = internal::ScheduleRow(
+              transform, inverse, CLAMP_TO_EDGE, 2048, 2048, 7, 5, count);
+            CAPTURE(scale, count);
+            RequirePointBits(row.origin, 5 * scale + 3, 7 * scale - 2);
+            RequirePointBits(row.step, scale, 0.0f);
+            REQUIRE(row.first == 0);
+            REQUIRE(row.last == count);
+        }
+    }
+}

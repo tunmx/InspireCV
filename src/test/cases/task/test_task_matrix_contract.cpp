@@ -143,6 +143,50 @@ uint64_t HashPointBits(const Point* points, int count) {
 
 }  // namespace
 
+TEST_CASE("task_affine_composition_allows_either_operand_to_alias",
+          "[task][geometry][regression]") {
+    Matrix first, second, expected;
+    first.setAll(1.25f, -0.375f, 17.5f, 0.625f, 0.75f, -9.25f, 0, 0, 1);
+    second.setAll(0.5f, 0.125f, 3, -0.25f, 1.5f, -2, 0, 0, 1);
+    expected.setConcat(first, second);
+    float values[9];
+    expected.get9(values);
+    std::array<uint32_t, 9> bits;
+    for (size_t i = 0; i < bits.size(); ++i) bits[i] = FloatBits(values[i]);
+    Matrix left = first, right = second;
+    left.setConcat(left, second);
+    right.setConcat(first, right);
+    RequireMatrixBits(left, bits);
+    RequireMatrixBits(right, bits);
+    expected.setConcat(first, first);
+    expected.get9(values);
+    for (size_t i = 0; i < bits.size(); ++i) bits[i] = FloatBits(values[i]);
+    first.setConcat(first, first);
+    RequireMatrixBits(first, bits);
+}
+
+#if defined(__clang__) && defined(__aarch64__)
+TEST_CASE("task_projective_inverse_preserves_unfused_last_minor",
+          "[task][geometry][regression][numeric-bit-contract]") {
+    // Runtime float bit patterns from the pre-change ARM implementation. The
+    // last minor distinguishes two rounded products from a fused multiply-sub.
+    const std::array<uint32_t, 9> input = {{
+      0x414da124, 0xbfdacf66, 0x409843b0,
+      0x401f251c, 0x40e038d1, 0x3fd887d8,
+      0x3bc262ab, 0xbb0c3fd5, 0x3f807839}};
+    float values[9];
+    for (size_t i = 0; i < input.size(); ++i) values[i] = FloatFromBits(input[i]);
+    Matrix matrix, inverse;
+    matrix.set9(values);
+    REQUIRE(matrix.invert(&inverse));
+    RequireMatrixBits(inverse, {{
+      0x3d988fe8, 0x3c93eb90, 0xbec466c1,
+      0xbcd795bb, 0x3e0b88a0, 0xbdd6d7b0,
+      0xba022116, 0x3940bf79,
+      inspirecv::GetLibraryInfo().lto_enabled ? 0x3f7f965cU : 0x3f7f965eU}});
+}
+#endif
+
 TEST_CASE("task_matrix_preserves_numeric_contract",
           "[task][geometry][contract][numeric-bit-contract]") {
     SECTION("affine and perspective inversion") {

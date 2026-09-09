@@ -58,6 +58,18 @@ bool Matrix::invertNonIdentity(Matrix* destination) const {
     Matrix* output = destination == nullptr || destination == this ? &scratch : destination;
     if (perspective) {
         geometry::StoreInverseProjective(fMat, reciprocalDeterminant, output->fMat);
+#if defined(__clang__) && defined(__aarch64__) && !INSPIRECV_TASK_PRESERVE_LTO_EVALUATION
+        {
+#pragma clang fp reassociate(off) contract(off)
+            // The ARM contract rounds both products of the last minor before
+            // subtracting. Newer SLP passes otherwise fuse this scalar tail,
+            // unlike the historical two-lane multiply/subtract sequence.
+            const float diagonal = fMat[kMScaleX] * fMat[kMScaleY];
+            const float off_diagonal = fMat[kMSkewX] * fMat[kMSkewY];
+            const float minor = diagonal - off_diagonal;
+            output->fMat[kMPersp2] = static_cast<float>(minor * reciprocalDeterminant);
+        }
+#endif
     } else {
         const geometry::Affine2D inverse =
           geometry::InverseWithReciprocalDeterminant(AffinePart(*this), reciprocalDeterminant);

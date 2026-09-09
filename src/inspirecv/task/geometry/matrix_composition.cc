@@ -80,6 +80,18 @@ void Matrix::setConcat(const Matrix& outer, const Matrix& inner) {
         return;
     }
 
+#if defined(__clang__) && defined(__aarch64__) && !INSPIRECV_TASK_PRESERVE_LTO_EVALUATION
+    if ((combinedType & kPerspective_Mask) == 0) {
+        // Evaluate all coefficients before writing: destination may alias
+        // either input. The affine route does not need a temporary Matrix.
+        const geometry::Affine2D values = geometry::Compose(AffinePart(outer), AffinePart(inner));
+        setAll(values.xx, values.xy, values.x_offset,
+               values.yx, values.yy, values.y_offset, 0.0f, 0.0f, 1.0f);
+        setTypeMask(kUnknown_Mask | kOnlyPerspectiveValid_Mask);
+        return;
+    }
+#endif
+
     Matrix product;
     if ((combinedType & kPerspective_Mask) != 0) {
         geometry_internal::ComposeProjectiveCompat(outer.fMat, inner.fMat,

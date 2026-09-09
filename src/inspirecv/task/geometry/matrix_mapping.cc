@@ -2,6 +2,7 @@
 #include <inspirecv/task/core/matrix.h>
 
 #include <cstring>
+#include <cmath>
 
 #if defined(INSPIRECV_TASK_USE_NEON)
 #include <arm_neon.h>
@@ -100,8 +101,17 @@ void ApplyAffine(const geometry::Affine2D& transform, Point* destination,
     if ((count & 1) != 0) {
         const float x = source->fX;
         const float y = source->fY;
+#if defined(__clang__) && defined(__aarch64__) && !INSPIRECV_TASK_PRESERVE_LTO_EVALUATION
+        // Preserve the historical odd-tail FMA order. In particular, its Y
+        // expression is ordered differently from the interleaved pair loop.
+        destination->fX = std::fma(y, transform.xy,
+                                   std::fma(x, transform.xx, transform.x_offset));
+        destination->fY = std::fma(y, transform.yy,
+                                   std::fma(x, transform.yx, transform.y_offset));
+#else
         destination->fX = x * transform.xx + y * transform.xy + transform.x_offset;
         destination->fY = x * transform.yx + y * transform.yy + transform.y_offset;
+#endif
         ++source;
         ++destination;
         --count;

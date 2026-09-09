@@ -2215,9 +2215,227 @@ Bitmap<D> Bitmap<D>::AffineBilinear(int width, int height, const TransformMatrix
     return AffineBilinearReference(width, height, matrix, border_mode, border_value);
 }
 
+namespace {
+
+// One allocation, with each four-pixel block holding a genuinely contiguous
+// weight vector. Keep indices/flags separately typed: loading across an AoS
+// member also reads padding and is neither a gather nor a valid float array.
+class AffineAxisTable {
+public:
+    struct Tap {
+        int xl, xu;
+        uint8_t in_l, in_u;
+    };
+
+    explicit AffineAxisTable(int width) : blocks_((static_cast<size_t>(width) + 3) / 4) {}
+
+    Tap& operator[](size_t x) { return blocks_[x / 4].taps[x % 4]; }
+    const Tap& operator[](size_t x) const { return blocks_[x / 4].taps[x % 4]; }
+    float& Fraction(size_t x) { return blocks_[x / 4].weights[x % 4]; }
+    const float* Weights(size_t x) const { return blocks_[x / 4].weights + x % 4; }
+
+private:
+    struct Block {
+        float weights[4];
+        Tap taps[4];
+    };
+    std::vector<Block> blocks_;
+};
+
+template <typename Pixel, int Channels>
+void AffineReplicateRow(const Pixel* low, const Pixel* up, Pixel* output, int width, float fy,
+                        const AffineAxisTable& table, int begin = 0) {
+    int x = begin;
+#if defined(__SSE2__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+    for (; x + 4 <= width; x += 4) {
+        const auto& p0 = table[x];
+        const auto& p1 = table[x + 1];
+        const auto& p2 = table[x + 2];
+        const auto& p3 = table[x + 3];
+        // Replicate/interior indices are already valid; no per-tap border
+        // flags or padding branches are needed in this row.
+        for (int channel = 0; channel < Channels; ++channel) {
+#if defined(__SSE2__)
+            const __m128 tl =
+                _mm_setr_ps(low[p0.xl * Channels + channel], low[p1.xl * Channels + channel],
+                            low[p2.xl * Channels + channel], low[p3.xl * Channels + channel]);
+            const __m128 tr =
+                _mm_setr_ps(low[p0.xu * Channels + channel], low[p1.xu * Channels + channel],
+                            low[p2.xu * Channels + channel], low[p3.xu * Channels + channel]);
+            const __m128 bl =
+                _mm_setr_ps(up[p0.xl * Channels + channel], up[p1.xl * Channels + channel],
+                            up[p2.xl * Channels + channel], up[p3.xl * Channels + channel]);
+            const __m128 br =
+                _mm_setr_ps(up[p0.xu * Channels + channel], up[p1.xu * Channels + channel],
+                            up[p2.xu * Channels + channel], up[p3.xu * Channels + channel]);
+            const __m128 fx = _mm_loadu_ps(table.Weights(x));
+            const __m128 top = _mm_add_ps(tl, _mm_mul_ps(_mm_sub_ps(tr, tl), fx));
+            const __m128 bottom = _mm_add_ps(bl, _mm_mul_ps(_mm_sub_ps(br, bl), fx));
+            const __m128 result =
+                _mm_add_ps(top, _mm_mul_ps(_mm_sub_ps(bottom, top), _mm_set1_ps(fy)));
+            if (std::is_same<Pixel, float>::value) {
+                if (Channels == 1) {
+                    _mm_storeu_ps(reinterpret_cast<float*>(output + x), result);
+                } else {
+                    float values[4];
+                    _mm_storeu_ps(values, result);
+                    for (int lane = 0; lane < 4; ++lane)
+                        output[(x + lane) * Channels + channel] = values[lane];
+                }
+            } else {
+                __m128i rounded = _mm_cvttps_epi32(result);
+                const __m128 fraction = _mm_sub_ps(result, _mm_cvtepi32_ps(rounded));
+                rounded = _mm_add_epi32(
+                    rounded,
+                    _mm_and_si128(_mm_castps_si128(_mm_cmpge_ps(fraction, _mm_set1_ps(0.5f))),
+                                  _mm_set1_epi32(1)));
+                const __m128i halves = _mm_packs_epi32(rounded, _mm_setzero_si128());
+                const __m128i bytes = _mm_packus_epi16(halves, _mm_setzero_si128());
+                const int packed = _mm_cvtsi128_si32(bytes);
+                if (Channels == 1) {
+                    std::memcpy(output + x, &packed, sizeof(packed));
+                } else {
+                    uint8_t values[4];
+                    std::memcpy(values, &packed, sizeof(packed));
+                    for (int lane = 0; lane < 4; ++lane)
+                        output[(x + lane) * Channels + channel] = values[lane];
+                }
+            }
+#else
+            const float32x4_t tl = {
+                float(low[p0.xl * Channels + channel]), float(low[p1.xl * Channels + channel]),
+                float(low[p2.xl * Channels + channel]), float(low[p3.xl * Channels + channel])};
+            const float32x4_t tr = {
+                float(low[p0.xu * Channels + channel]), float(low[p1.xu * Channels + channel]),
+                float(low[p2.xu * Channels + channel]), float(low[p3.xu * Channels + channel])};
+            const float32x4_t bl = {
+                float(up[p0.xl * Channels + channel]), float(up[p1.xl * Channels + channel]),
+                float(up[p2.xl * Channels + channel]), float(up[p3.xl * Channels + channel])};
+            const float32x4_t br = {
+                float(up[p0.xu * Channels + channel]), float(up[p1.xu * Channels + channel]),
+                float(up[p2.xu * Channels + channel]), float(up[p3.xu * Channels + channel])};
+            const float32x4_t fx = vld1q_f32(table.Weights(x));
+            const float32x4_t top = vaddq_f32(tl, vmulq_f32(vsubq_f32(tr, tl), fx));
+            const float32x4_t bottom = vaddq_f32(bl, vmulq_f32(vsubq_f32(br, bl), fx));
+            const float32x4_t result =
+                vaddq_f32(top, vmulq_f32(vsubq_f32(bottom, top), vdupq_n_f32(fy)));
+            if (std::is_same<Pixel, float>::value) {
+                if (Channels == 1) {
+                    vst1q_f32(reinterpret_cast<float*>(output + x), result);
+                } else {
+                    float values[4];
+                    vst1q_f32(values, result);
+                    for (int lane = 0; lane < 4; ++lane)
+                        output[(x + lane) * Channels + channel] = values[lane];
+                }
+            } else {
+#if defined(__aarch64__)
+                const uint16x4_t rounded = vmovn_u32(vcvtaq_u32_f32(result));
+                const uint8x8_t bytes = vmovn_u16(vcombine_u16(rounded, rounded));
+                const uint32_t packed = vget_lane_u32(vreinterpret_u32_u8(bytes), 0);
+                if (Channels == 1) {
+                    std::memcpy(output + x, &packed, sizeof(packed));
+                } else {
+                    uint8_t values[4];
+                    std::memcpy(values, &packed, sizeof(packed));
+                    for (int lane = 0; lane < 4; ++lane)
+                        output[(x + lane) * Channels + channel] = values[lane];
+                }
+#else
+                float values[4];
+                vst1q_f32(values, result);
+                for (int lane = 0; lane < 4; ++lane)
+                    output[(x + lane) * Channels + channel] =
+                        static_cast<Pixel>(std::round(values[lane]));
+#endif
+            }
+#endif
+        }
+    }
+#endif
+    for (; x < width; ++x) {
+        const auto& tap = table[x];
+        const float fx = *table.Weights(x);
+        for (int channel = 0; channel < Channels; ++channel) {
+            const int left = tap.xl * Channels + channel, right = tap.xu * Channels + channel;
+            const float top = low[left] + (float(low[right]) - low[left]) * fx;
+            const float bottom = up[left] + (float(up[right]) - up[left]) * fx;
+            const float value = top + (bottom - top) * fy;
+            output[x * Channels + channel] = std::is_same<Pixel, uint8_t>::value
+                                                 ? static_cast<Pixel>(std::round(value))
+                                                 : static_cast<Pixel>(value);
+        }
+    }
+}
+
+template <typename Pixel>
+// Only small single-channel sources use this bounded stack buffer. Outlining
+// prevents its stack cost from affecting the general affine entry point.
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline, flatten))
+#endif
+void AffineConstantSmallImage(const Pixel* source, int source_width, int source_height,
+                              Pixel* output, int width, int height, float sy, float ty,
+                              AffineAxisTable& table, Pixel border) {
+    Pixel padded[32 * 32];
+    const int pitch = source_width + 1;
+    for (int y = 0; y < source_height; ++y) {
+        std::copy_n(source + y * source_width, source_width, padded + y * pitch);
+        padded[y * pitch + source_width] = border;
+    }
+    std::fill_n(padded + source_height * pitch, pitch, border);
+    // Every missing x tap now addresses the padding column, and every missing
+    // y tap the padding row. Keep all four-tap arithmetic, including NaN/Inf.
+    for (int x = 0; x < width; ++x) {
+        if (!table[x].in_l) table[x].xl = source_width;
+        if (!table[x].in_u) table[x].xu = source_width;
+    }
+    for (int y = 0; y < height; ++y) {
+        const float position = y * sy + ty;
+        const int yl = static_cast<int>(std::floor(position)), yu = yl + 1;
+        const float fraction = position - yl;
+        if ((yu < 0 || yl >= source_height) && std::isfinite(float(border))) {
+            std::fill_n(output + y * width, width, static_cast<Pixel>(float(border) + 0.f));
+            continue;
+        }
+        const Pixel* low = padded + ((yl >= 0 && yl < source_height) ? yl : source_height) * pitch;
+        const Pixel* up = padded + ((yu >= 0 && yu < source_height) ? yu : source_height) * pitch;
+        AffineReplicateRow<Pixel, 1>(low, up, output + y * width, width, fraction, table);
+    }
+}
+
+template <typename Pixel, int Channels>
+inline void AffineConstantRowEdges(const Pixel* low, const Pixel* up, Pixel* output, int begin, int end,
+                                  float fy, Pixel border, const AffineAxisTable& table) {
+    for (int x = begin; x < end; ++x) {
+        const auto& tap = table[x];
+        const float fx = *table.Weights(x);
+        if (!tap.in_l && !tap.in_u && std::isfinite(float(border))) {
+            // Match interpolation's positive zero for a -0 border, while
+            // avoiding four identical samples for fully padded pixels.
+            std::fill_n(output + x * Channels, Channels, static_cast<Pixel>(float(border) + 0.f));
+            continue;
+        }
+        for (int channel = 0; channel < Channels; ++channel) {
+            const float tl = tap.in_l ? low[tap.xl * Channels + channel] : border;
+            const float tr = tap.in_u ? low[tap.xu * Channels + channel] : border;
+            const float bl = tap.in_l ? up[tap.xl * Channels + channel] : border;
+            const float br = tap.in_u ? up[tap.xu * Channels + channel] : border;
+            const float top = tl + (tr - tl) * fx;
+            const float bottom = bl + (br - bl) * fx;
+            const float value = top + (bottom - top) * fy;
+            output[x * Channels + channel] = std::is_same<Pixel, uint8_t>::value
+                                                 ? static_cast<Pixel>(std::round(value))
+                                                 : static_cast<Pixel>(value);
+        }
+    }
+}
+
+}  // namespace
+
 template <typename D>
-Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const TransformMatrix &matrix,
-                                           BorderMode border_mode, D border_value) const {
+Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const TransformMatrix& matrix,
+                                             BorderMode border_mode, D border_value) const {
 #ifndef OKCV_ENABLE_AFFINE_GENERAL_SIMD
 #define OKCV_ENABLE_AFFINE_GENERAL_SIMD 1
 #endif
@@ -2230,23 +2448,31 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
     const float tx = matrix[2];
     const float ty = matrix[5];
 
+    // Byte-valued identity transforms need only an independent copy. Keep the
+    // float path unchanged: its NaN/infinity arithmetic has different semantics.
+    if (std::is_same<D, uint8_t>::value && width == width_ && height == height_ &&
+        a == 1.f && d == 1.f && b == 0.f && c == 0.f && tx == 0.f && ty == 0.f) {
+        return Clone();
+    }
+
     if (std::fabs(b) < 1e-6f && std::fabs(c) < 1e-6f) {
         Bitmap<D> dst;
         dst.Reset(width, height, channels_);
 
         // Precompute x indices and weights (+ in-bounds flags for constant border)
-        struct XInfo { int xl, xu; float fx; uint8_t in_l, in_u; };
-        std::vector<XInfo> xinfo(static_cast<size_t>(width));
+        using XInfo = AffineAxisTable::Tap;
+        AffineAxisTable xinfo(width);
+        int interior_begin = width, interior_end = 0;
         if (border_mode == BORDER_MODE_REPLICATE) {
             for (int x = 0; x < width; ++x) {
                 float srcx = x * a + tx;
                 int xl = static_cast<int>(srcx);
                 float fx = srcx - xl;
-                if (xl < 0) { xl = 0; fx = 0.f; }
+                if (srcx < 0.f) { xl = 0; fx = 0.f; }
                 if (xl >= width_ - 1) { xl = std::max(0, width_ - 1); fx = 0.f; }
                 xinfo[x].xl = xl;
                 xinfo[x].xu = std::min(xl + 1, width_ - 1);
-                xinfo[x].fx = fx;
+                xinfo.Fraction(x) = fx;
                 xinfo[x].in_l = 1;
                 xinfo[x].in_u = 1;
             }
@@ -2258,10 +2484,26 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                 int xu = xl + 1;
                 xinfo[x].xl = xl;
                 xinfo[x].xu = xu;
-                xinfo[x].fx = fx;
+                xinfo.Fraction(x) = fx;
                 xinfo[x].in_l = (xl >= 0 && xl < width_) ? 1 : 0;
                 xinfo[x].in_u = (xu >= 0 && xu < width_) ? 1 : 0;
+                if (xinfo[x].in_l && xinfo[x].in_u) {
+                    interior_begin = std::min(interior_begin, x);
+                    interior_end = x + 1;
+                }
             }
+        }
+        // A linear x mapping has one contiguous interior, including negative
+        // scales. Align it to the weight-table blocks for the branch-free row.
+        interior_begin = static_cast<int>(std::min<size_t>(
+          (static_cast<size_t>(interior_begin) + 3) / 4 * 4, static_cast<size_t>(width)));
+        interior_end = interior_end / 4 * 4;
+
+        if (border_mode == BORDER_MODE_CONSTANT && channels_ == 1 &&
+            width < 32 && height < 32 && width_ < 32 && height_ < 32) {
+            AffineConstantSmallImage(Data(), width_, height_, dst.Data(), width, height,
+                                     d, ty, xinfo, border_value);
+            return dst;
         }
 
         for (int y = 0; y < height; ++y) {
@@ -2272,7 +2514,7 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
             if (border_mode == BORDER_MODE_REPLICATE) {
                 yl = static_cast<int>(srcy);
                 fy = srcy - yl;
-                if (yl < 0) { yl = 0; fy = 0.f; }
+                if (srcy < 0.f) { yl = 0; fy = 0.f; }
                 if (yl >= height_ - 1) { yl = std::max(0, height_ - 1); fy = 0.f; }
                 yu = std::min(yl + 1, height_ - 1);
             } else {
@@ -2283,6 +2525,37 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                 in_yu = (yu >= 0 && yu < height_) ? 1 : 0;
             }
 
+            if (!in_yl && !in_yu && std::isfinite(float(border_value))) {
+                std::fill_n(dst.Row(y), static_cast<size_t>(width) * channels_,
+                            static_cast<D>(float(border_value) + 0.f));
+                continue;
+            }
+
+            if (channels_ == 1 && border_mode == BORDER_MODE_REPLICATE) {
+                AffineReplicateRow<D, 1>(Row(yl), Row(yu), dst.Row(y), width, fy, xinfo);
+                continue;
+            }
+            if (channels_ == 3 && border_mode == BORDER_MODE_REPLICATE) {
+                AffineReplicateRow<D, 3>(Row(yl), Row(yu), dst.Row(y), width, fy, xinfo);
+                continue;
+            }
+            if (border_mode == BORDER_MODE_CONSTANT && in_yl && in_yu &&
+                (channels_ == 1 || channels_ == 3) && interior_end - interior_begin >= 8) {
+                const D* low = Row(yl);
+                const D* up = Row(yu);
+                D* output = dst.Row(y);
+                if (channels_ == 1) {
+                    AffineConstantRowEdges<D, 1>(low, up, output, 0, interior_begin, fy, border_value, xinfo);
+                    AffineReplicateRow<D, 1>(low, up, output, interior_end, fy, xinfo, interior_begin);
+                    AffineConstantRowEdges<D, 1>(low, up, output, interior_end, width, fy, border_value, xinfo);
+                } else {
+                    AffineConstantRowEdges<D, 3>(low, up, output, 0, interior_begin, fy, border_value, xinfo);
+                    AffineReplicateRow<D, 3>(low, up, output, interior_end, fy, xinfo, interior_begin);
+                    AffineConstantRowEdges<D, 3>(low, up, output, interior_end, width, fy, border_value, xinfo);
+                }
+                continue;
+            }
+
             if (channels_ == 1 && std::is_same<D, float>::value) {
                 const float* row_low = in_yl ? reinterpret_cast<const float*>(Row(yl)) : nullptr;
                 const float* row_up  = in_yu ? reinterpret_cast<const float*>(Row(yu)) : nullptr;
@@ -2290,7 +2563,7 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                 int x = 0;
 #if defined(__SSE2__)
                 for (; x + 4 <= width; x += 4) {
-                    __m128 vx = _mm_loadu_ps(&xinfo[x].fx);
+                    __m128 vx = _mm_loadu_ps(xinfo.Weights(x));
                     __m128 vy = _mm_set1_ps(fy);
                     float tl0, tr0, bl0, br0, tl1, tr1, bl1, br1, tl2, tr2, bl2, br2, tl3, tr3, bl3, br3;
                     const XInfo& xi0 = xinfo[x + 0];
@@ -2328,7 +2601,7 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                 }
 #elif defined(__ARM_NEON) || defined(__ARM_NEON__)
                 for (; x + 4 <= width; x += 4) {
-                    float32x4_t vx = vld1q_f32(&xinfo[x].fx);
+                    float32x4_t vx = vld1q_f32(xinfo.Weights(x));
                     float32x4_t vy = vdupq_n_f32(fy);
                     float tl0, tr0, bl0, br0, tl1, tr1, bl1, br1, tl2, tr2, bl2, br2, tl3, tr3, bl3, br3;
                     const XInfo& xi0 = xinfo[x + 0];
@@ -2383,8 +2656,8 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                     float tr = (in_yl && xi.in_u) ? row_low[xi.xu] : static_cast<float>(border_value);
                     float bl = (in_yu && xi.in_l) ? row_up [xi.xl] : static_cast<float>(border_value);
                     float br = (in_yu && xi.in_u) ? row_up [xi.xu] : static_cast<float>(border_value);
-                    float top = tl + (tr - tl) * xi.fx;
-                    float bottom = bl + (br - bl) * xi.fx;
+                    float top = tl + (tr - tl) * xinfo.Fraction(x);
+                    float bottom = bl + (br - bl) * xinfo.Fraction(x);
                     out_row[x] = top + (bottom - top) * fy;
                 }
                 continue;
@@ -2397,7 +2670,7 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                 int x = 0;
 #if defined(__SSE2__)
                 for (; x + 4 <= width; x += 4) {
-                    __m128 vx = _mm_loadu_ps(&xinfo[x].fx);
+                    __m128 vx = _mm_loadu_ps(xinfo.Weights(x));
                     __m128 vy = _mm_set1_ps(fy);
                     float tl0, tr0, bl0, br0, tl1, tr1, bl1, br1, tl2, tr2, bl2, br2, tl3, tr3, bl3, br3;
                     const XInfo& xi0 = xinfo[x + 0];
@@ -2427,7 +2700,14 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                     __m128 vtop = _mm_add_ps(vtl, _mm_mul_ps(_mm_sub_ps(vtr, vtl), vx));
                     __m128 vbot = _mm_add_ps(vbl, _mm_mul_ps(_mm_sub_ps(vbr, vbl), vx));
                     __m128 vout = _mm_add_ps(vtop, _mm_mul_ps(_mm_sub_ps(vbot, vtop), vy));
-                    __m128i vi  = _mm_cvtps_epi32(vout);
+                    // Match the scalar tail's round-half-up for nonnegative u8.
+                    // Adding 0.5f first would double-round nextafter(0.5f, 0).
+                    __m128i vi = _mm_cvttps_epi32(vout);
+                    const __m128 fraction = _mm_sub_ps(vout, _mm_cvtepi32_ps(vi));
+                    const __m128i increment = _mm_and_si128(
+                      _mm_castps_si128(_mm_cmpge_ps(fraction, _mm_set1_ps(0.5f))),
+                      _mm_set1_epi32(1));
+                    vi = _mm_add_epi32(vi, increment);
                     __m128i vi16 = _mm_packs_epi32(vi, _mm_setzero_si128());
                     __m128i vi8  = _mm_packus_epi16(vi16, _mm_setzero_si128());
                     alignas(16) uint8_t tmp[16];
@@ -2439,7 +2719,7 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                 }
 #elif defined(__ARM_NEON) || defined(__ARM_NEON__)
                 for (; x + 4 <= width; x += 4) {
-                    float32x4_t vx = vld1q_f32(&xinfo[x].fx);
+                    float32x4_t vx = vld1q_f32(xinfo.Weights(x));
                     float32x4_t vy = vdupq_n_f32(fy);
                     float tl0, tr0, bl0, br0, tl1, tr1, bl1, br1, tl2, tr2, bl2, br2, tl3, tr3, bl3, br3;
                     const XInfo& xi0 = xinfo[x + 0];
@@ -2485,12 +2765,21 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                     float32x4_t vtop = vaddq_f32(vtl, vmulq_f32(vsubq_f32(vtr, vtl), vx));
                     float32x4_t vbot = vaddq_f32(vbl, vmulq_f32(vsubq_f32(vbr, vbl), vx));
                     float32x4_t vout = vaddq_f32(vtop, vmulq_f32(vsubq_f32(vbot, vtop), vy));
+#if defined(__aarch64__)
+                    // Round all four lanes exactly as std::round, then narrow
+                    // and store one packed word (no scalar lane round-trips).
+                    const uint16x4_t rounded = vmovn_u32(vcvtaq_u32_f32(vout));
+                    const uint8x8_t bytes = vmovn_u16(vcombine_u16(rounded, rounded));
+                    const uint32_t packed = vget_lane_u32(vreinterpret_u32_u8(bytes), 0);
+                    std::memcpy(out_row + x, &packed, sizeof(packed));
+#else
                     float outv[4];
                     vst1q_f32(outv, vout);
                     out_row[x + 0] = static_cast<uint8_t>(std::round(outv[0]));
                     out_row[x + 1] = static_cast<uint8_t>(std::round(outv[1]));
                     out_row[x + 2] = static_cast<uint8_t>(std::round(outv[2]));
                     out_row[x + 3] = static_cast<uint8_t>(std::round(outv[3]));
+#endif
                 }
 #endif
                 for (; x < width; ++x) {
@@ -2499,8 +2788,8 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                     float tr = (in_yl && xi.in_u) ? row_low[xi.xu] : static_cast<uint8_t>(border_value);
                     float bl = (in_yu && xi.in_l) ? row_up [xi.xl] : static_cast<uint8_t>(border_value);
                     float br = (in_yu && xi.in_u) ? row_up [xi.xu] : static_cast<uint8_t>(border_value);
-                    float top = tl + (tr - tl) * xi.fx;
-                    float bottom = bl + (br - bl) * xi.fx;
+                    float top = tl + (tr - tl) * xinfo.Fraction(x);
+                    float bottom = bl + (br - bl) * xinfo.Fraction(x);
                     out_row[x] = static_cast<uint8_t>(std::round(top + (bottom - top) * fy));
                 }
                 continue;
@@ -2514,7 +2803,7 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                 int x = 0;
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
                 for (; x + 4 <= width; x += 4) {
-                    float32x4_t vx = vld1q_f32(&xinfo[x].fx);
+                    float32x4_t vx = vld1q_f32(xinfo.Weights(x));
                     float32x4_t vy = vdupq_n_f32(fy);
                     for (int cc = 0; cc < 3; ++cc) {
                         const XInfo& xi0 = xinfo[x + 0];
@@ -2571,7 +2860,7 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                 }
 #elif defined(__SSE2__)
                 for (; x + 4 <= width; x += 4) {
-                    __m128 vx = _mm_loadu_ps(&xinfo[x].fx);
+                    __m128 vx = _mm_loadu_ps(xinfo.Weights(x));
                     __m128 vy = _mm_set1_ps(fy);
                     for (int cc = 0; cc < 3; ++cc) {
                         const XInfo& xi0 = xinfo[x + 0];
@@ -2617,8 +2906,8 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                         float tr = (in_yl && xi.in_u) ? row_low[xi.xu * 3 + cc] : static_cast<float>(border_value);
                         float bl = (in_yu && xi.in_l) ? row_up [xi.xl * 3 + cc] : static_cast<float>(border_value);
                         float br = (in_yu && xi.in_u) ? row_up [xi.xu * 3 + cc] : static_cast<float>(border_value);
-                        float top = tl + (tr - tl) * xi.fx;
-                        float bottom = bl + (br - bl) * xi.fx;
+                        float top = tl + (tr - tl) * xinfo.Fraction(x);
+                        float bottom = bl + (br - bl) * xinfo.Fraction(x);
                         out_row[x * 3 + cc] = top + (bottom - top) * fy;
                     }
                 }
@@ -2633,7 +2922,7 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                 int x = 0;
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
                 for (; x + 4 <= width; x += 4) {
-                    float32x4_t vx = vld1q_f32(&xinfo[x].fx);
+                    float32x4_t vx = vld1q_f32(xinfo.Weights(x));
                     float32x4_t vy = vdupq_n_f32(fy);
                     for (int cc = 0; cc < 3; ++cc) {
                         const XInfo& xi0 = xinfo[x + 0];
@@ -2691,7 +2980,7 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                 }
 #elif defined(__SSE2__)
                 for (; x + 4 <= width; x += 4) {
-                    __m128 vx = _mm_loadu_ps(&xinfo[x].fx);
+                    __m128 vx = _mm_loadu_ps(xinfo.Weights(x));
                     __m128 vy = _mm_set1_ps(fy);
                     for (int cc = 0; cc < 3; ++cc) {
                         const XInfo& xi0 = xinfo[x + 0];
@@ -2739,8 +3028,8 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                         float tr = (in_yl && xi.in_u) ? static_cast<float>(row_low[xi.xu * 3 + cc]) : static_cast<float>(border_value);
                         float bl = (in_yu && xi.in_l) ? static_cast<float>(row_up [xi.xl * 3 + cc]) : static_cast<float>(border_value);
                         float br = (in_yu && xi.in_u) ? static_cast<float>(row_up [xi.xu * 3 + cc]) : static_cast<float>(border_value);
-                        float top = tl + (tr - tl) * xi.fx;
-                        float bottom = bl + (br - bl) * xi.fx;
+                        float top = tl + (tr - tl) * xinfo.Fraction(x);
+                        float bottom = bl + (br - bl) * xinfo.Fraction(x);
                         float vv = top + (bottom - top) * fy;
                         if (vv < 0.f) vv = 0.f;
                         if (vv > 255.f) vv = 255.f;
@@ -2759,7 +3048,7 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                       (in_yl && xinfo[x].in_u && yl >= 0 && yl < height_ && xinfo[x].xu >= 0 && xinfo[x].xu < width_) ? at(yl, xinfo[x].xu)[cch] : border_value,
                       (in_yu && xinfo[x].in_l && yu >= 0 && yu < height_ && xinfo[x].xl >= 0 && xinfo[x].xl < width_) ? at(yu, xinfo[x].xl)[cch] : border_value,
                       (in_yu && xinfo[x].in_u && yu >= 0 && yu < height_ && xinfo[x].xu >= 0 && xinfo[x].xu < width_) ? at(yu, xinfo[x].xu)[cch] : border_value,
-                      xinfo[x].fx, fy);
+                      xinfo.Fraction(x), fy);
                 }
             }
         }

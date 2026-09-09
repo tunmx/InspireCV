@@ -247,6 +247,26 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     endif()
     set_property(SOURCE ${INSPIRECV_TASK_FAST_MATH_SOURCES} APPEND
                  PROPERTY COMPILE_OPTIONS ${ST_TASK_FAST_MATH_OPTIONS})
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
+       ST_TARGET_PROCESSOR MATCHES "^(x86_64|X86_64|AMD64|i686|i386)$")
+        # GCC 13 SLP replaces the two scanline divisions with an approximate
+        # reciprocal under fast-math (even 5/5 can become 0x3f7fffff). These
+        # coordinates are an observable sampling contract, not an approximation.
+        set_property(SOURCE ${TASK_DIR}/execution/row_schedule.cc APPEND
+                     PROPERTY COMPILE_OPTIONS -fno-unsafe-math-optimizations)
+    endif()
+    # LTO historically has its own evaluation contract. Keep that path intact;
+    # stabilize the non-LTO ARM Release path affected by newer Clang versions.
+    set_property(SOURCE ${INSPIRECV_TASK_FAST_MATH_SOURCES} APPEND
+                 PROPERTY COMPILE_DEFINITIONS
+                 INSPIRECV_TASK_PRESERVE_LTO_EVALUATION=${ST_HAVE_LTO})
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT ST_HAVE_LTO AND
+       ST_TARGET_PROCESSOR MATCHES "^(arm64|aarch64|ARM64)$")
+        # Keep within-expression FMA, but honor the inverse's local
+        # contract(off) scope instead of fusing across statement boundaries.
+        set_property(SOURCE ${TASK_DIR}/geometry/matrix_inverse.cc APPEND
+                     PROPERTY COMPILE_OPTIONS -ffp-contract=on)
+    endif()
 elseif(MSVC)
     set_property(SOURCE ${INSPIRECV_TASK_FAST_MATH_SOURCES} APPEND
                  PROPERTY COMPILE_OPTIONS /O2 /fp:fast)
