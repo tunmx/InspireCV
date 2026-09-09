@@ -5,11 +5,22 @@
 #include <cmath>
 #include <sstream>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "inspirecv/inspirecv.h"
 
 namespace inspirecv {
+
+template <typename T>
+typename std::enable_if<std::is_arithmetic<T>::value, long double>::type TestLogValue(const T &value) {
+    return static_cast<long double>(value);
+}
+
+template <typename T>
+typename std::enable_if<!std::is_arithmetic<T>::value, const T&>::type TestLogValue(const T &value) {
+    return value;
+}
 
 template <typename T>
 double Diff(const T &a, const T &b) {
@@ -38,7 +49,8 @@ bool CheckArrayNear(const T *a, const T *b, size_t size, double eps, std::string
         double d = Diff(a[i], b[i]);
         if (d > eps) {
             if (count <= max_logs) {
-                ss << "a[" << i << "]: " << a[i] << ", b[" << i << "]: " << b[i] << ", diff: " << d
+                ss << "a[" << i << "]: " << TestLogValue(a[i])
+                   << ", b[" << i << "]: " << TestLogValue(b[i]) << ", diff: " << d
                    << ", eps: " << eps << "\n";
             }
             if (d > max_diff)
@@ -78,37 +90,33 @@ bool CheckArrayEqual(const std::vector<T> &a, const std::vector<T> &b, std::stri
 #define REQUIRE_NEAR_C_ARRAY(a, b, size, eps)                     \
     do {                                                          \
         std::string msg;                                          \
-        REQUIRE(inspirecv::CheckArrayNear(a, b, size, eps, msg)); \
-        if (!msg.empty()) {                                       \
-            INFO(msg);                                            \
-        }                                                         \
+        bool ok = inspirecv::CheckArrayNear(a, b, size, eps, msg); \
+        INFO(msg);                                                \
+        REQUIRE(ok);                                               \
     } while (0)
 
 #define REQUIRE_NEAR_ARRAY(a, b, eps)                       \
     do {                                                    \
         std::string msg;                                    \
-        REQUIRE(inspirecv::CheckArrayNear(a, b, eps, msg)); \
-        if (!msg.empty()) {                                 \
-            INFO(msg);                                      \
-        }                                                   \
+        bool ok = inspirecv::CheckArrayNear(a, b, eps, msg); \
+        INFO(msg);                                          \
+        REQUIRE(ok);                                         \
     } while (0)
 
 #define REQUIRE_EQ_C_ARRAY(a, b, size)                        \
     do {                                                      \
         std::string msg;                                      \
-        REQUIRE(inspirecv::CheckArrayEqual(a, b, size, msg)); \
-        if (!msg.empty()) {                                   \
-            INFO(msg);                                        \
-        }                                                     \
+        bool ok = inspirecv::CheckArrayEqual(a, b, size, msg); \
+        INFO(msg);                                            \
+        REQUIRE(ok);                                           \
     } while (0)
 
 #define REQUIRE_EQ_ARRAY(a, b)                          \
     do {                                                \
         std::string msg;                                \
-        REQUIRE(inspirecv::CheckArrayEqual(a, b, msg)); \
-        if (!msg.empty()) {                             \
-            INFO(msg);                                  \
-        }                                               \
+        bool ok = inspirecv::CheckArrayEqual(a, b, msg); \
+        INFO(msg);                                      \
+        REQUIRE(ok);                                     \
     } while (0)
 
 #define REQUIRE_NEAR(a, b, eps)                                                         \

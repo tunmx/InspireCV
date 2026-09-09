@@ -3,6 +3,7 @@
 #define BIGGUYSMAIN_TEST_SETTINGS_H
 #include <catch2/catch.hpp>
 #include <iostream>
+#include <cstring>
 #include "test_helper.h"
 
 struct test_case_split {

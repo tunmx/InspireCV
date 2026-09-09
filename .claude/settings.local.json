@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /Users/tunm/work/InspireFace log --all --oneline)",
+      "Bash(grep -h \"define.*HF_\\\\|define.*HSUCCEED\\\\|define.*HERR\" /Users/tunm/work/InspireFace/cpp/inspireface/c_api/*.h)",
+      "Bash(git -C /Users/tunm/work/InspireFace log --all --format=\"%aI\")",
+      "Bash(git:*)",
+      "Bash(find /Users/tunm/work/InspireFace/cpp -type f \\\\\\( -name \"*.cpp\" -o -name \"*.h\" \\\\\\) -exec wc -l {} +)",
+      "Bash(find /Users/tunm/work/InspireFace/python -type f -name \"*.py\" -exec wc -l {} +)",
+      "WebSearch",
+      "Bash(gh api:*)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'Name: {d.get\\(\\\\\"name\\\\\"\\)}\\\\nBio: {d.get\\(\\\\\"bio\\\\\"\\)}\\\\nCompany: {d.get\\(\\\\\"company\\\\\"\\)}\\\\nLocation: {d.get\\(\\\\\"location\\\\\"\\)}\\\\nBlog: {d.get\\(\\\\\"blog\\\\\"\\)}\\\\nPublic repos: {d.get\\(\\\\\"public_repos\\\\\"\\)}\\\\nFollowers: {d.get\\(\\\\\"followers\\\\\"\\)}\\\\nCreated: {d.get\\(\\\\\"created_at\\\\\"\\)}'\\)\")",
+      "Bash(find /Users/tunm/work/InspireCV/src/inspirecv -type f \\\\\\( -name \"*.cpp\" -o -name \"*.cc\" -o -name \"*.h\" \\\\\\) ! -path \"*/3rdparty/*\" -exec wc -l {} +)",
+      "Bash(find /Users/tunm/work/InspireCV/src/inspirecv/okcv -type f \\\\\\( -name \"*.cpp\" -o -name \"*.cc\" -o -name \"*.h\" \\\\\\) -exec wc -l {} +)",
+      "Bash(find /Users/tunm/work/InspireCV/src/inspirecv/task -type f \\\\\\( -name \"*.cc\" -o -name \"*.S\" -o -name \"*.h\" \\\\\\) -exec wc -l {} +)"
+    ]
+  }
+}

@@ -1,0 +1,124 @@
+name: OpenCV 4.5.5 backend (manual)
+
+# Deliberately manual-only: this workflow compiles OpenCV from source and must
+# not consume runner time for pushes or pull requests.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inspirecv-opencv-4.5.5-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUILD_TYPE: Release
+  OPENCV_VERSION: 4.5.5
+
+jobs:
+  build-opencv-backend:
+    name: Ubuntu / OpenCV 4.5.5 / all library modes
+    # OpenCV 4.5.5 is intentionally paired with a stable toolchain image.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download OpenCV 4.5.5 from GitHub
+        run: |
+          git clone \
+            --branch "$OPENCV_VERSION" \
+            --depth 1 \
+            https://github.com/opencv/opencv.git \
+            "$RUNNER_TEMP/opencv-src"
+
+      - name: Configure OpenCV
+        run: |
+          cmake \
+            -S "$RUNNER_TEMP/opencv-src" \
+            -B "$RUNNER_TEMP/opencv-build" \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/opencv-$OPENCV_VERSION" \
+            -DBUILD_LIST=core,imgproc,imgcodecs,highgui \
+            -DBUILD_SHARED_LIBS=ON \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_PERF_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_opencv_apps=OFF \
+            -DBUILD_JAVA=OFF \
+            -DBUILD_opencv_java=OFF \
+            -DBUILD_opencv_python2=OFF \
+            -DBUILD_opencv_python3=OFF \
+            -DWITH_FFMPEG=OFF \
+            -DWITH_GSTREAMER=OFF \
+            -DWITH_GTK=OFF \
+            -DWITH_IPP=OFF \
+            -DWITH_OPENCL=OFF \
+            -DWITH_OPENGL=OFF \
+            -DWITH_QT=OFF \
+            -DWITH_V4L=OFF
+
+      - name: Compile and install OpenCV
+        run: |
+          cmake \
+            --build "$RUNNER_TEMP/opencv-build" \
+            --config "$BUILD_TYPE" \
+            --target install \
+            --parallel 2
+
+      - name: Build and test InspireCV against OpenCV
+        run: |
+          opencv_prefix="$RUNNER_TEMP/opencv-$OPENCV_VERSION"
+          opencv_dir="$opencv_prefix/lib/cmake/opencv4"
+
+          for build_mode in object static shared; do
+            case "$build_mode" in
+              object)
+                object_libs=ON
+                shared_libs=OFF
+                examples=ON
+                ;;
+              static)
+                object_libs=OFF
+                shared_libs=OFF
+                examples=OFF
+                ;;
+              shared)
+                object_libs=OFF
+                shared_libs=ON
+                examples=OFF
+                ;;
+            esac
+
+            build_dir="$GITHUB_WORKSPACE/build-opencv-$build_mode"
+            cmake \
+              -S "$GITHUB_WORKSPACE" \
+              -B "$build_dir" \
+              -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+              -DCMAKE_PREFIX_PATH="$opencv_prefix" \
+              -DOpenCV_DIR="$opencv_dir" \
+              -DINSPIRECV_BACKEND_OPENCV=ON \
+              -DINSPIRECV_BUILD_OBJECT_LIBS="$object_libs" \
+              -DINSPIRECV_BUILD_SHARED_LIBS="$shared_libs" \
+              -DINSPIRECV_BUILD_TESTS=ON \
+              -DINSPIRECV_BUILD_EXAMPLES="$examples" \
+              -DINSPIRECV_INSTALL=ON
+            cmake --build "$build_dir" --config "$BUILD_TYPE" --parallel
+            ctest \
+              --test-dir "$build_dir" \
+              -C "$BUILD_TYPE" \
+              --output-on-failure
+            cmake \
+              --install "$build_dir" \
+              --config "$BUILD_TYPE" \
+              --prefix "$build_dir/install"
+          done
+
+      - name: Upload InspireCV install trees
+        uses: actions/upload-artifact@v4
+        with:
+          name: inspirecv-opencv-4.5.5-ubuntu
+          path: build-opencv-*/install
+          if-no-files-found: error
+          retention-days: 7

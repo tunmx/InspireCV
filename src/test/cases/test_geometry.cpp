@@ -258,6 +258,8 @@ TEST_CASE("test_rects", "[geometry]") {
             inspirecv::Point2f p2(5.0f, 25.0f);   // Outside
             REQUIRE(r5.Contains(p1));
             REQUIRE_FALSE(r5.Contains(p2));
+            REQUIRE_FALSE(r5.Contains(inspirecv::Point2f(40.0f, 30.0f)));
+            REQUIRE_FALSE(r5.Contains(inspirecv::Point2f(20.0f, 60.0f)));
         }
 
         SECTION("Contains Rect") {
@@ -540,6 +542,21 @@ TEST_CASE("test_transform_matrix", "[geometry]") {
             REQUIRE(m7.Get(1, 0) == Approx(1.0f).margin(0.0001f));
             REQUIRE(m7.Get(1, 1) == Approx(0.0f).margin(0.0001f));
         }
+
+        SECTION("Operations compose instead of replacing prior state") {
+            inspirecv::TransformMatrix composed;
+            composed.Translate(2.0f, 3.0f);
+            composed.Scale(4.0f, 5.0f);
+            REQUIRE(composed.Get(0, 0) == Approx(4.0f));
+            REQUIRE(composed.Get(1, 1) == Approx(5.0f));
+            REQUIRE(composed.Get(0, 2) == Approx(8.0f));
+            REQUIRE(composed.Get(1, 2) == Approx(15.0f));
+        }
+    }
+
+    SECTION("Squeeze has the backend-independent affine extent") {
+        inspirecv::TransformMatrix matrix;
+        REQUIRE(matrix.Squeeze().size() == 6);
     }
 
     SECTION("Clone") {

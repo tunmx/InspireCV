@@ -1,0 +1,65 @@
+#include <cstdio>
+
+#include <inspirecv/version.h>
+
+namespace inspirecv {
+namespace {
+
+const LibraryInfo kLibraryInfo = {
+    @INSPIRECV_VERSION_MAJOR@,
+    @INSPIRECV_VERSION_MINOR@,
+    @INSPIRECV_VERSION_PATCH@,
+    "@INSPIRECV_VERSION_STRING@",
+    "@BUILD_TIMESTAMP@",
+    "@INSPIRECV_BACKEND_STRING@",
+    "@CMAKE_SYSTEM_NAME@",
+    "@ST_TARGET_PROCESSOR@",
+    "@CMAKE_CXX_COMPILER_ID@",
+    "@CMAKE_CXX_COMPILER_VERSION@",
+    "@CMAKE_BUILD_TYPE@",
+    @INSPIRECV_CXX_STANDARD@,
+    (@ST_HAVE_LTO@ != 0),
+    (@ST_HAVE_SSE@ != 0),
+    (@ST_HAVE_AVX2@ != 0),
+    (@ST_HAVE_NEON@ != 0),
+    (@ST_DISABLE_TILING@ == 0),
+    @ST_TILE_WIDTH@,
+    "@ST_ACTIVE_CXX_FLAGS@",
+};
+
+}  // namespace
+
+const char* GetVersion() {
+    return kLibraryInfo.version_string;
+}
+
+const char* GetCVBackend() {
+    return kLibraryInfo.cv_backend;
+}
+
+const LibraryInfo& GetLibraryInfo() {
+    return kLibraryInfo;
+}
+
+void PrintLibraryInfo() {
+    const LibraryInfo& info = GetLibraryInfo();
+    std::printf("%s\n", info.version_string);
+    std::printf("  Backend    : %s\n", info.cv_backend);
+    std::printf("  System     : %s (%s)\n", info.system_name,
+                info.system_processor);
+    std::printf("  Compiler   : %s %s (C++%d)\n", info.compiler_name,
+                info.compiler_version, info.cxx_standard);
+    std::printf("  BuildType  : %s\n", info.build_type);
+    std::printf("  LTO        : %s\n", info.lto_enabled ? "ON" : "OFF");
+    std::printf("  SSE        : %s\n", info.sse_enabled ? "ON" : "OFF");
+    std::printf("  AVX2       : %s\n", info.avx2_enabled ? "ON" : "OFF");
+    std::printf("  NEON       : %s\n", info.neon_enabled ? "ON" : "OFF");
+    std::printf("  TaskTiling : %s\n",
+                info.task_tiling_enabled ? "ON" : "OFF");
+    std::printf("  TaskTile   : %d\n", info.task_tile_width);
+    if (info.cxx_flags && info.cxx_flags[0]) {
+        std::printf("  CXXFlags   : %s\n", info.cxx_flags);
+    }
+}
+
+}  // namespace inspirecv

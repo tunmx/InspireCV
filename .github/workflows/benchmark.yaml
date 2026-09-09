@@ -1,0 +1,241 @@
+name: Full benchmark
+
+# A pull request does not run benchmarks. Merging it into benchmark creates the
+# push event below, so both direct pushes and completed merges are covered once.
+on:
+  push:
+    branches:
+      - benchmark
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bmk-benchmark-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  OPENCV_VERSION: 4.5.5
+
+jobs:
+  native-cpu:
+    if: >-
+      github.repository == 'tunmx/inspirecv-benchmark' &&
+      github.ref == 'refs/heads/benchmark'
+    name: CPU / ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x86_64
+            runner: ubuntu-24.04
+          - label: linux-arm64
+            runner: ubuntu-24.04-arm
+          - label: macos-arm64
+            runner: macos-15
+          - label: macos-x86_64
+            runner: macos-15-intel
+          - label: windows-x86_64
+            runner: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Enforce benchmark repository and branch
+        run: python scripts/benchmark/verify_ci_context.py
+
+      - name: Cache OpenCV 4.5.5
+        uses: actions/cache@v4
+        with:
+          path: .benchmark-deps/opencv/${{ matrix.label }}
+          key: opencv-${{ env.OPENCV_VERSION }}-${{ matrix.label }}-${{ hashFiles('scripts/benchmark/build_opencv.py') }}
+
+      - name: Build pinned OpenCV comparison dependency
+        run: >-
+          python scripts/benchmark/build_opencv.py
+          --version "${{ env.OPENCV_VERSION }}"
+          --work-dir "${{ runner.temp }}/inspirecv-opencv-work"
+          --install-dir ".benchmark-deps/opencv/${{ matrix.label }}"
+          --jobs 2
+
+      - name: Run correctness and full native benchmark suite
+        run: >-
+          python scripts/benchmark/run_native_suite.py
+          --source-dir .
+          --build-dir "${{ runner.temp }}/inspirecv-native-build"
+          --results-dir "benchmark-results/${{ matrix.label }}"
+          --platform-label "${{ matrix.label }}"
+          --opencv-prefix ".benchmark-deps/opencv/${{ matrix.label }}"
+          --repeats 3
+          --samples 101
+          --warmups 10
+
+      - name: Publish platform summary
+        if: always() && hashFiles(format('benchmark-results/{0}/summary.md', matrix.label)) != ''
+        shell: bash
+        run: cat "benchmark-results/${{ matrix.label }}/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload native benchmark artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ matrix.label }}-${{ github.sha }}
+          path: benchmark-results/${{ matrix.label }}
+          if-no-files-found: warn
+          retention-days: 90
+
+  android:
+    if: >-
+      github.repository == 'tunmx/inspirecv-benchmark' &&
+      github.ref == 'refs/heads/benchmark'
+    name: Android / emulator x86_64 + ARM64 compile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Enforce benchmark repository and branch
+        run: python3 scripts/benchmark/verify_ci_context.py
+
+      - name: Enable KVM access
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Build and run Android benchmark suite
+        env:
+          INSPIRECV_ANDROID_API: 35
+          INSPIRECV_ANDROID_NDK_VERSION: 27.2.12479018
+          INSPIRECV_ANDROID_BENCHMARK_REPEATS: 3
+        run: >-
+          bash scripts/benchmark/run_android_emulator.sh
+          "$GITHUB_WORKSPACE"
+          "$RUNNER_TEMP/inspirecv-android-build"
+          "$GITHUB_WORKSPACE/benchmark-results/android-emulator-x86_64"
+
+      - name: Publish Android summary
+        if: always() && hashFiles('benchmark-results/android-emulator-x86_64/summary.md') != ''
+        run: cat benchmark-results/android-emulator-x86_64/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Android benchmark artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-android-${{ github.sha }}
+          path: benchmark-results/android-emulator-x86_64
+          if-no-files-found: warn
+          retention-days: 90
+
+  cuda-rtx3060:
+    if: >-
+      github.repository == 'tunmx/inspirecv-benchmark' &&
+      github.ref == 'refs/heads/benchmark' &&
+      vars.BMK_CUDA_SSH_ENABLED == 'true'
+    name: CUDA / SSH / RTX 3060
+    runs-on:
+      - self-hosted
+      - inspirecv-benchmark-controller
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Enforce benchmark repository and branch
+        run: python3 scripts/benchmark/verify_ci_context.py
+
+      - name: Prepare isolated SSH credentials
+        shell: bash
+        env:
+          CUDA_SSH_PRIVATE_KEY: ${{ secrets.BMK_CUDA_SSH_PRIVATE_KEY }}
+          CUDA_SSH_KNOWN_HOSTS: ${{ secrets.BMK_CUDA_SSH_KNOWN_HOSTS }}
+        run: |
+          test -n "$CUDA_SSH_PRIVATE_KEY"
+          test -n "$CUDA_SSH_KNOWN_HOSTS"
+          install -d -m 700 "$RUNNER_TEMP/inspirecv-benchmark-ssh"
+          printf '%s\n' "$CUDA_SSH_PRIVATE_KEY" \
+            > "$RUNNER_TEMP/inspirecv-benchmark-ssh/id_ed25519"
+          printf '%s\n' "$CUDA_SSH_KNOWN_HOSTS" \
+            > "$RUNNER_TEMP/inspirecv-benchmark-ssh/known_hosts"
+          chmod 600 \
+            "$RUNNER_TEMP/inspirecv-benchmark-ssh/id_ed25519" \
+            "$RUNNER_TEMP/inspirecv-benchmark-ssh/known_hosts"
+
+      - name: Run full CUDA suite on RTX 3060
+        shell: bash
+        env:
+          BMK_CUDA_SSH_HOST: ${{ vars.BMK_CUDA_SSH_HOST || '192.168.0.116' }}
+          BMK_CUDA_SSH_USER: ${{ vars.BMK_CUDA_SSH_USER || 'tunm' }}
+          BMK_CUDA_SSH_KEY_PATH: ${{ runner.temp }}/inspirecv-benchmark-ssh/id_ed25519
+          BMK_CUDA_KNOWN_HOSTS_PATH: ${{ runner.temp }}/inspirecv-benchmark-ssh/known_hosts
+          INSPIRECV_CUDA_BENCHMARK_REPEATS: 3
+          INSPIRECV_CUDA_BENCHMARK_SAMPLES: 101
+        run: >-
+          bash scripts/benchmark/run_cuda_remote.sh
+          "$GITHUB_WORKSPACE"
+          "$GITHUB_WORKSPACE/benchmark-results/cuda-rtx3060"
+
+      - name: Publish CUDA summary
+        if: always() && hashFiles('benchmark-results/cuda-rtx3060/summary.md') != ''
+        shell: bash
+        run: cat benchmark-results/cuda-rtx3060/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload CUDA benchmark artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-cuda-rtx3060-${{ github.sha }}
+          path: benchmark-results/cuda-rtx3060
+          if-no-files-found: warn
+          retention-days: 90
+
+  aggregate:
+    if: >-
+      always() &&
+      github.repository == 'tunmx/inspirecv-benchmark' &&
+      github.ref == 'refs/heads/benchmark'
+    name: Aggregate reports
+    needs:
+      - native-cpu
+      - android
+      - cuda-rtx3060
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Enforce benchmark repository and branch
+        run: python3 scripts/benchmark/verify_ci_context.py
+
+      - name: Download platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: collected-benchmark-results
+
+      - name: Build combined report
+        run: >-
+          python3 scripts/benchmark/aggregate_results.py
+          --input-dir collected-benchmark-results
+          --output-dir benchmark-results/all-platforms
+
+      - name: Publish combined summary
+        run: cat benchmark-results/all-platforms/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload combined benchmark artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-all-platforms-${{ github.sha }}
+          path: |
+            benchmark-results/all-platforms
+            collected-benchmark-results
+          if-no-files-found: error
+          retention-days: 90

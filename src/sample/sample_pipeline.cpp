@@ -1,6 +1,7 @@
 #include <iostream>
 #include <vector>
 #include "inspirecv/inspirecv.h"
+#include <cmath>
 
 using namespace inspirecv;
 
