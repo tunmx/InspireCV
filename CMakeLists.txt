@@ -264,8 +264,11 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
        ST_TARGET_PROCESSOR MATCHES "^(arm64|aarch64|ARM64)$")
         # Keep within-expression FMA, but honor the inverse's local
         # contract(off) scope instead of fusing across statement boundaries.
+        # This intentionally overrides fast-math's contraction default. Clang
+        # 22 diagnoses the supported combination; suppress just that driver
+        # diagnostic here so a downstream -Werror remains usable.
         set_property(SOURCE ${TASK_DIR}/geometry/matrix_inverse.cc APPEND
-                     PROPERTY COMPILE_OPTIONS -ffp-contract=on)
+                     PROPERTY COMPILE_OPTIONS -ffp-contract=on -Wno-overriding-option)
     endif()
 elseif(MSVC)
     set_property(SOURCE ${INSPIRECV_TASK_FAST_MATH_SOURCES} APPEND
