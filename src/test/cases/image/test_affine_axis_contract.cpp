@@ -93,7 +93,79 @@ void CheckAxisMatrix() {
     }
 }
 
+template <typename Pixel>
+void CheckPublicNonUniformScale() {
+    for (int size : {128, 256, 512, 1024}) {
+        std::vector<Pixel> pixels(size_t(size) * size * 3);
+        for (size_t i = 0; i < pixels.size(); ++i) {
+            pixels[i] = static_cast<Pixel>((i * 37 + i / 7) % 251);
+        }
+        const auto source = inspirecv::ImageT<Pixel>::Create(size, size, 3, pixels.data());
+        const float center = (size - 1) * 0.5f;
+        const float tx = center - 0.75f * center;
+        const float ty = center - 1.25f * center;
+        const auto matrix = inspirecv::TransformMatrix::Create(0.75f, 0, tx, 0, 1.25f, ty);
+        const auto actual = source.WarpAffine(matrix, size, size);
+        REQUIRE(actual.Width() == size);
+        REQUIRE(actual.Height() == size);
+        REQUIRE(actual.Channels() == 3);
+
+        // The benchmark's non-uniform scale uses dyadic coordinates. Evaluate
+        // every output pixel independently in double, including border taps.
+        // One final mismatch assertion avoids millions of Catch bookkeeping
+        // operations without sampling or skipping any output pixel.
+        size_t mismatch = pixels.size();
+        Pixel expected_at_mismatch = 0;
+        for (int y = 0; y < size && mismatch == pixels.size(); ++y) {
+            const double py = y * 1.25 + ty;
+            const int y0 = static_cast<int>(std::floor(py));
+            const int y1 = y0 + 1;
+            const double fy = py - y0;
+            for (int x = 0; x < size && mismatch == pixels.size(); ++x) {
+                const double px = x * 0.75 + tx;
+                const int x0 = static_cast<int>(std::floor(px));
+                const int x1 = x0 + 1;
+                const double fx = px - x0;
+                for (int c = 0; c < 3; ++c) {
+                    // Public WarpAffine defaults to a constant zero border,
+                    // including partial contributions from outside taps.
+                    auto sample = [&](int ix, int iy) -> double {
+                        if (ix < 0 || ix >= size || iy < 0 || iy >= size) return 0;
+                        return pixels[(size_t(iy) * size + ix) * 3 + c];
+                    };
+                    const double expected =
+                      (1 - fx) * (1 - fy) * sample(x0, y0) +
+                      fx * (1 - fy) * sample(x1, y0) +
+                      (1 - fx) * fy * sample(x0, y1) +
+                      fx * fy * sample(x1, y1);
+                    const Pixel rounded = std::is_same<Pixel, uint8_t>::value
+                      ? static_cast<Pixel>(std::round(expected)) : static_cast<Pixel>(expected);
+                    const size_t index = (size_t(y) * size + x) * 3 + c;
+                    if (actual.Data()[index] != rounded) {
+                        mismatch = index;
+                        expected_at_mismatch = rounded;
+                        break;
+                    }
+                }
+            }
+        }
+        const Pixel actual_at_mismatch = mismatch < pixels.size() ? actual.Data()[mismatch] : Pixel(0);
+        CAPTURE(size, mismatch, expected_at_mismatch, actual_at_mismatch);
+        REQUIRE(mismatch == pixels.size());
+    }
+}
+
 }  // namespace
+
+TEST_CASE("image_public_nonuniform_scale_u8_matches_full_pixel_reference",
+          "[image][affine][regression][simd]") {
+    CheckPublicNonUniformScale<uint8_t>();
+}
+
+TEST_CASE("image_public_nonuniform_scale_f32_matches_full_pixel_reference",
+          "[image][affine][regression][simd]") {
+    CheckPublicNonUniformScale<float>();
+}
 
 TEST_CASE("image_axis_affine_u8_preserves_each_simd_lane_and_tail",
           "[image][affine][regression][simd]") {
