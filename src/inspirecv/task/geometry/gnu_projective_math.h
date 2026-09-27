@@ -14,7 +14,11 @@ void ComposeProjectiveCompat(const float left[9], const float right[9],
 #elif defined(__clang__) && defined(__aarch64__) && !INSPIRECV_TASK_PRESERVE_LTO_EVALUATION
 inline void ComposeProjectiveCompat(const float left[9], const float right[9],
                                     float output[9]) {
+#if INSPIRECV_TASK_HAS_CLANG_FP_REASSOCIATE
 #pragma clang fp reassociate(off) contract(off)
+#else
+#pragma clang fp contract(off)
+#endif
     // Preserve the ARM Release dot-product order independently of SLP's choice
     // of fused operand. Inlining keeps the original allocation-free hot path.
     for (int row = 0; row < 3; ++row) {
@@ -24,12 +28,28 @@ inline void ComposeProjectiveCompat(const float left[9], const float right[9],
             const bool fused_tail = row == 0 || (row == 1 && column == 0);
             const bool reverse_first_pair =
               (row == 1 && column == 2) || (row == 2 && column != 0);
+#if INSPIRECV_TASK_HAS_CLANG_FP_REASSOCIATE
             const float first_pair = reverse_first_pair
               ? std::fma(a[0], b[0], a[1] * b[3])
               : std::fma(a[1], b[3], a[0] * b[0]);
             output[row * 3 + column] = fused_tail
               ? std::fma(a[2], b[6], first_pair)
               : first_pair + a[2] * b[6];
+#else
+            // Old Clang cannot disable reassociation locally. Explicitly
+            // round each unfused intermediate while retaining the same FMAs.
+            const volatile float first_product = reverse_first_pair
+              ? a[1] * b[3] : a[0] * b[0];
+            const volatile float first_pair = reverse_first_pair
+              ? std::fma(a[0], b[0], first_product)
+              : std::fma(a[1], b[3], first_product);
+            if (fused_tail) {
+                output[row * 3 + column] = std::fma(a[2], b[6], first_pair);
+            } else {
+                const volatile float tail_product = a[2] * b[6];
+                output[row * 3 + column] = first_pair + tail_product;
+            }
+#endif
         }
     }
 }

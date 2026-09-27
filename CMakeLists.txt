@@ -213,6 +213,23 @@ endif()
 set(ST_HAVE_SSE 0)
 set(ST_HAVE_AVX2 0)
 set(ST_HAVE_NEON 0)
+
+# NDK r18b's Clang supports fp contract, but not fp reassociate. Probe the
+# pragma instead of inferring support from vendor-specific Clang versions.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT ST_HAVE_LTO AND
+   ST_TARGET_PROCESSOR MATCHES "^(arm64|aarch64|ARM64)$")
+    include(CheckCXXSourceCompiles)
+    check_cxx_source_compiles("
+        float ordered_sum(float a, float b, float c) {
+        #pragma clang fp reassociate(off) contract(off)
+            return a * b + c;
+        }
+        int main() { return ordered_sum(1.0f, 2.0f, 3.0f) == 5.0f ? 0 : 1; }
+    " INSPIRECV_TASK_HAS_CLANG_FP_REASSOCIATE)
+    list(APPEND INSPIRECV_PRIVATE_DEFINITIONS
+         INSPIRECV_TASK_HAS_CLANG_FP_REASSOCIATE=$<BOOL:${INSPIRECV_TASK_HAS_CLANG_FP_REASSOCIATE}>)
+endif()
+
 set(ST_DISABLE_TILING 0)
 if(INSPIRECV_TASK_DISABLE_TILING)
     set(ST_DISABLE_TILING 1)
@@ -335,7 +352,16 @@ if (INSPIRECV_TASK_ENABLE_ARM_NEON)
         list(APPEND INSPIRECV_SRC_FILES
              ${INSPIRECV_TASK_NEON_SOURCES})
         if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-            set_property(SOURCE ${INSPIRECV_TASK_NEON_SOURCES} APPEND
+            # Generic CPU kernels also contain NEON intrinsics when
+            # INSPIRECV_TASK_USE_NEON is defined for the target.
+            set(INSPIRECV_TASK_ARM32_NEON_SOURCES
+                ${INSPIRECV_TASK_NEON_SOURCES}
+                ${TASK_DIR}/kernels/cpu/channel_ops.cc
+                ${TASK_DIR}/kernels/cpu/sampling_ops.cc
+                ${TASK_DIR}/kernels/cpu/tensor_writers.cc
+                ${TASK_DIR}/kernels/cpu/yuv_ops.cc
+                ${TASK_DIR}/geometry/matrix_mapping.cc)
+            set_property(SOURCE ${INSPIRECV_TASK_ARM32_NEON_SOURCES} APPEND
                          PROPERTY COMPILE_OPTIONS -mfpu=neon)
         endif()
     endif()
