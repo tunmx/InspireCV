@@ -148,8 +148,44 @@ void ApplyAffine(const geometry::Affine2D& transform, Point* destination,
 #endif
 }
 
+#if defined(__GNUC__) && !defined(__clang__) && \
+    (defined(__x86_64__) || defined(__i386__))
+// Fast-math lets GCC vectorize the reciprocal as RCPPS plus one refinement.
+// Its last bits depend on the CPU's initial estimate and differ from scalar
+// tails. Keep the ordered float sums and rounded reciprocal for every point,
+// while leaving the affine hot paths under their existing fast-math contract.
+__attribute__((optimize("no-unsafe-math-optimizations")))
+void ApplyProjectiveExact(const float matrix[9], Point* destination,
+                          const Point* source, int count) {
+    while (count-- > 0) {
+        const float x = source->fX;
+        const float y = source->fY;
+        const float projectedX = x * matrix[Matrix::kMScaleX] +
+                                 y * matrix[Matrix::kMSkewX] + matrix[Matrix::kMTransX];
+        const float projectedY = x * matrix[Matrix::kMSkewY] +
+                                 y * matrix[Matrix::kMScaleY] + matrix[Matrix::kMTransY];
+        float divisor = x * matrix[Matrix::kMPersp0] +
+                        (y * matrix[Matrix::kMPersp1] + matrix[Matrix::kMPersp2]);
+        if (divisor != 0.0f) {
+            divisor = 1.0f / divisor;
+        }
+        destination->fX = projectedX * divisor;
+        destination->fY = projectedY * divisor;
+        ++source;
+        ++destination;
+    }
+}
+#endif
 void ApplyProjective(const Matrix& transform, Point* destination,
                      const Point* source, int count) {
+#if defined(__GNUC__) && !defined(__clang__) && \
+    (defined(__x86_64__) || defined(__i386__))
+    // Copy once outside the strict function: GCC cannot inline the fast-math
+    // Matrix accessors into it, so calling them per point would be expensive.
+    float coefficients[9];
+    transform.get9(coefficients);
+    ApplyProjectiveExact(coefficients, destination, source, count);
+#else
     while (count-- > 0) {
         const float x = source->fX;
         const float y = source->fY;
@@ -167,6 +203,7 @@ void ApplyProjective(const Matrix& transform, Point* destination,
         ++source;
         ++destination;
     }
+#endif
 }
 
 void StoreOrderedBounds(float firstX, float firstY, float secondX, float secondY,

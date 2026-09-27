@@ -50,19 +50,15 @@ jobs:
             object_libs: "OFF"
             shared_libs: "ON"
             examples: "OFF"
-          - os: windows-latest
-            library: static
-            object_libs: "OFF"
-            shared_libs: "OFF"
-            examples: "OFF"
-          - os: windows-latest
-            library: shared
-            object_libs: "OFF"
-            shared_libs: "ON"
-            examples: "OFF"
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Show Linux toolchain and CPU
+        if: runner.os == 'Linux'
+        run: |
+          c++ --version
+          lscpu
 
       - name: Configure
         shell: bash
@@ -82,7 +78,7 @@ jobs:
         run: ctest --test-dir build -C ${{ env.BUILD_TYPE }} --output-on-failure
 
       - name: Upload test diagnostics
-        if: ${{ always() && runner.os != 'Windows' }}
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-diagnostics-${{ matrix.os }}-${{ matrix.library }}

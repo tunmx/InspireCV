@@ -3,6 +3,7 @@
 #include <inspirecv/task/core/matrix.h>
 #include <inspirecv/version.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -16,25 +17,36 @@ using inspirecv::task::Point;
 using inspirecv::task::Rect;
 
 #if defined(__GNUC__) && !defined(__clang__)
+#if defined(__x86_64__) || defined(__i386__)
+// GNU/x86 projective mapping uses ordered sums and a rounded float reciprocal,
+// independent of the CPU-specific RCPPS estimate used by fast-math.
+constexpr uint32_t kComposedPoint1X = 0x41a5403f;
+constexpr uint32_t kComposedPoint2X = 0x424a81dd;
+constexpr uint32_t kProjectivePoint0X = 0x413fffff;
+constexpr uint32_t kProjectivePoint0Y = 0x407ffffc;
+constexpr uint32_t kProjectivePoint2X = 0x41b00000;
+constexpr uint32_t kProjectivePoint2Y = 0x418fffff;
+#else
+constexpr uint32_t kComposedPoint1X = 0x41a5403e;
+constexpr uint32_t kComposedPoint2X = 0x424a81dc;
+constexpr uint32_t kProjectivePoint0X = 0x413ffffe;
+constexpr uint32_t kProjectivePoint0Y = 0x407ffffb;
+constexpr uint32_t kProjectivePoint2X = 0x41b00001;
+constexpr uint32_t kProjectivePoint2Y = 0x41900000;
+#endif
 constexpr uint32_t kPerspectiveInversePerspX = 0xb9939a86;
 constexpr uint32_t kPerspectiveInversePerspY = 0x3b139a86;
 constexpr uint32_t kComposedSkewX = 0xbe866667;
 constexpr uint32_t kComposedSkewY = 0x3e400000;
 constexpr uint32_t kComposedPerspX = 0x00000000;
 constexpr uint32_t kComposedPoint0X = 0x41714821;
-constexpr uint32_t kComposedPoint1X = 0x41a5403e;
-constexpr uint32_t kComposedPoint2X = 0x424a81dc;
 constexpr uint32_t kProjectiveScaleX = 0x3f76f912;
 constexpr uint32_t kProjectiveSkewX = 0xbd4a22d0;
 constexpr uint32_t kProjectiveTranslateX = 0x41274460;
 constexpr uint32_t kProjectiveScaleY = 0x3fc823a7;
 constexpr uint32_t kProjectiveTranslateY = 0x410131e8;
 constexpr uint32_t kProjectivePerspX = 0xbd2a9d40;
-constexpr uint32_t kProjectivePoint0X = 0x413ffffe;
-constexpr uint32_t kProjectivePoint0Y = 0x407ffffb;
 constexpr uint32_t kProjectivePoint1Y = 0x3ffffff3;
-constexpr uint32_t kProjectivePoint2X = 0x41b00001;
-constexpr uint32_t kProjectivePoint2Y = 0x41900000;
 constexpr uint32_t kProjectivePoint3X = 0x41100000;
 constexpr uint32_t kProjectivePoint3Y = 0x41700002;
 #elif defined(__x86_64__) || defined(_M_X64)
@@ -128,6 +140,30 @@ void RequirePointBits(const Point* points, size_t count, const uint32_t* expecte
         REQUIRE(FloatBits(points[i].fY) == expected[2 * i + 1]);
     }
 }
+
+#if defined(__GNUC__) && !defined(__clang__) && \
+    (defined(__x86_64__) || defined(__i386__))
+void RequireProjectiveBatchBits(const Matrix& matrix, const Point* source,
+                                int count, const uint32_t* expected) {
+    // Cover vector-sized batches, scalar tails, different alignments and
+    // aliasing. All must use the same rounded reciprocal on GNU/x86.
+    for (int padding = 0; padding < 4; ++padding) {
+        for (int batch = 1; batch <= count; ++batch) {
+            INFO("padding " << padding << ", batch size " << batch);
+            std::vector<Point> output(count + padding);
+            std::vector<Point> in_place(count + padding);
+            std::copy(source, source + count, in_place.begin() + padding);
+            for (int start = 0; start < count; start += batch) {
+                const int size = std::min(batch, count - start);
+                matrix.mapPoints(output.data() + padding + start, source + start, size);
+                matrix.mapPoints(in_place.data() + padding + start, size);
+            }
+            RequirePointBits(output.data() + padding, count, expected);
+            RequirePointBits(in_place.data() + padding, count, expected);
+        }
+    }
+}
+#endif
 
 uint64_t HashPointBits(const Point* points, int count) {
     uint64_t hash = UINT64_C(1469598103934665603);
@@ -246,6 +282,10 @@ TEST_CASE("task_matrix_preserves_numeric_contract",
           kComposedPoint0X, 0xc0a9519e, kComposedPoint1X, 0xc0cb16bb, kComposedPoint2X,
           0xc1117e51, 0x43adecb0, 0x430141ec, 0x41a43c4b, 0xc0d1cc84};
         RequirePointBits(destination, 5, expected);
+#if defined(__GNUC__) && !defined(__clang__) && \
+    (defined(__x86_64__) || defined(__i386__))
+        RequireProjectiveBatchBits(composed, source, 5, expected);
+#endif
     }
 
     SECTION("rotation and pre/post composition") {
@@ -371,6 +411,10 @@ TEST_CASE("task_matrix_preserves_numeric_contract",
                                       kProjectivePoint2X, kProjectivePoint2Y,
                                       kProjectivePoint3X, kProjectivePoint3Y};
         RequirePointBits(mapped, 4, expected4);
+#if defined(__GNUC__) && !defined(__clang__) && \
+    (defined(__x86_64__) || defined(__i386__))
+        RequireProjectiveBatchBits(projective, source4, 4, expected4);
+#endif
 
         const Point source3[] = {{-2.0f, 1.0f}, {3.5f, -4.0f}, {7.0f, 6.0f}};
         const Point destination3[] = {{10.0f, 20.0f}, {13.0f, 5.0f}, {30.0f, 18.0f}};

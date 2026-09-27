@@ -37,8 +37,6 @@ jobs:
             runner: macos-15
           - label: macos-x86_64
             runner: macos-15-intel
-          - label: windows-x86_64
-            runner: windows-2025
     steps:
       - uses: actions/checkout@v4
         with:

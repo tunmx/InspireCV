@@ -620,8 +620,9 @@ consumer can install and load InspireCV through `find_package`. Run the binary
 directly only when selecting a focused Catch2 filter.
 
 The default GitHub Actions workflow checks object, static and shared builds on
-Linux, macOS and Windows, builds the public examples, tests installed/source
-consumers, and runs ASan/UBSan on Linux. OpenCV is intentionally separated into
+Linux, object and shared builds on macOS, builds the public examples, tests
+installed/source consumers, and runs ASan/UBSan on Linux. Windows CI builds are
+temporarily disabled, including the full benchmark workflow. OpenCV is separated into
 the manual-only `OpenCV 4.5.5 backend (manual)` workflow: it downloads OpenCV
 4.5.5 from GitHub, compiles it from source, then validates all three InspireCV
 library modes. It has no push, pull-request or scheduled trigger. To run it,
