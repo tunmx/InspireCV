@@ -116,6 +116,56 @@ If OpenCV is installed outside the default search path, add
 `-DOpenCV_DIR=/path/to/opencv-4.5.5/lib/cmake/opencv4`. Newer OpenCV releases
 may also work, but 4.5.5 is the release baseline.
 
+### Windows x64
+
+Install Visual Studio 2022 or Build Tools 2022 with the **Desktop development
+with C++** workload (MSVC v143 and a Windows SDK), **CMake 3.20 or newer**, and
+**Ninja**. The Visual Studio C++ CMake tools component supplies CMake and Ninja.
+Use 64-bit Windows PowerShell 5.1 or PowerShell 7 in an initialized **x64 Native
+Tools** environment. From the repository root, build and install the default
+Release CPU/OKCV configuration with:
+
+```powershell
+.\command\build_windows.ps1
+```
+
+The script uses Ninja and installs headers, the library and CMake package files
+to `build/windows-x64-Release-object/install`. The default remains an OBJECT
+library for source integration, with a static archive for installed consumers.
+Select a standalone static library or DLL, and enable tests and examples, with:
+
+```powershell
+.\command\build_windows.ps1 -LibraryType Static -RunTests
+.\command\build_windows.ps1 -LibraryType Shared -Configuration Debug -RunTests -Examples
+```
+
+Build directories are separate for each configuration and library type.
+`-BuildDirectory` selects another directory; its `install` subdirectory receives
+the package. `-Jobs` controls parallel compilation (default: 4), and
+`-CMakeOptions` accepts an array of additional CMake options. Use the named
+script parameters for configuration, library type, tests and examples.
+`-RunTests` runs the unit, installed-package and source-integration CTest checks.
+
+The Visual Studio CMake generator is also supported directly:
+
+```powershell
+cmake -S . -B build-windows-vs -G "Visual Studio 17 2022" -A x64 -DINSPIRECV_BUILD_TESTS=ON
+cmake --build build-windows-vs --config Release --parallel
+ctest --test-dir build-windows-vs -C Release --output-on-failure --no-tests=error
+cmake --install build-windows-vs --config Release --prefix "$PWD/build-windows-vs/install"
+```
+
+Installed consumers use
+`InspireCV::inspirecv` as on other platforms. For DLL deployment, put the
+installed `bin/inspirecv.dll` beside the application or add that `bin`
+directory to the application's `PATH`. The default OKCV image reader and
+writer accept UTF-8 filenames, including spaces and Chinese characters.
+
+Windows support covers x64 CPU/OKCV builds with MSVC. OpenCV, CUDA and ARM64
+are outside this Windows build configuration.
+Global AVX2 remains opt-in, with Task's isolated helpers dispatched through
+runtime CPU checks.
+
 ## Image API
 
 Include `<inspirecv/inspirecv.h>`. `Image` stores unsigned 8-bit pixels;
@@ -416,6 +466,7 @@ during configuration.
 | macOS ARM64 | NEON | Build, unit tests, image comparison and benchmark |
 | macOS x86_64 | SSE4.1/AVX2 dispatch | Build and unit tests |
 | Linux x86_64 | SSE4.1/AVX2 dispatch | GCC build and unit tests |
+| Windows Server 2022 x64 | MSVC CPU, Task SSE4.1/AVX2 dispatch | Build, unit tests and installed/source consumers |
 | Linux x86_64 + NVIDIA | CUDA SM 86 backend | RTX 3060 exact-output tests, memory checks and benchmark |
 | Android arm64-v8a | NEON | NDK cross-build |
 | Android armeabi-v7a | NEON | NDK cross-build |
@@ -620,9 +671,9 @@ consumer can install and load InspireCV through `find_package`. Run the binary
 directly only when selecting a focused Catch2 filter.
 
 The default GitHub Actions workflow checks object, static and shared builds on
-Linux, object and shared builds on macOS, builds the public examples, tests
-installed/source consumers, and runs ASan/UBSan on Linux. Windows CI builds are
-temporarily disabled, including the full benchmark workflow. OpenCV is separated into
+Linux and Windows, object and shared builds on macOS, builds the public examples,
+tests installed/source consumers, and runs ASan/UBSan on Linux. Windows benchmark
+runs remain disabled. OpenCV is separated into
 the manual-only `OpenCV 4.5.5 backend (manual)` workflow: it downloads OpenCV
 4.5.5 from GitHub, compiles it from source, then validates all three InspireCV
 library modes. It has no push, pull-request or scheduled trigger. To run it,

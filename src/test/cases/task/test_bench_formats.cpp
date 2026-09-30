@@ -11,6 +11,10 @@
 #include <algorithm>
 #include <iomanip>
 
+#if defined(_WIN32)
+#include <malloc.h>
+#endif
+
 using inspirecv::task::PixelFormat;
 
 static std::string getImagesDir() {
@@ -45,14 +49,28 @@ struct AlignedBuf {
     void alloc(size_t n, size_t align = 64) {
         free();
         size = n;
+#if defined(_WIN32)
+        void* p = _aligned_malloc(n, align);
+#else
         void* p = nullptr;
         int rc = posix_memalign(&p, align, n);
         if (rc != 0) {
             p = std::malloc(n);
         }
+#endif
         ptr = static_cast<uint8_t*>(p);
     }
-    void free() { if (ptr) { ::free(ptr); ptr = nullptr; size = 0; } }
+    void free() {
+        if (ptr) {
+#if defined(_WIN32)
+            _aligned_free(ptr);
+#else
+            ::free(ptr);
+#endif
+            ptr = nullptr;
+            size = 0;
+        }
+    }
     ~AlignedBuf() { free(); }
 };
 

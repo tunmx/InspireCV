@@ -2,12 +2,18 @@
 
 #include <cstring>
 
+#include "inspirecv/task/platform/cpu_features.h"
+
 #if defined(INSPIRECV_TASK_USE_NEON)
 #include <arm_neon.h>
 #endif
 
-#if defined(INSPIRECV_TASK_USE_SSE) && defined(__SSE4_1__)
+#if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
+#if defined(_MSC_VER)
+#include <immintrin.h>
+#else
 #include <x86intrin.h>
+#endif
 #endif
 
 namespace inspirecv {
@@ -66,7 +72,7 @@ void inspirecv_task_c3_to_float_c4_arm(const uint8_t*, float*, const float*,
 }
 #endif
 
-#if defined(INSPIRECV_TASK_USE_SSE) && defined(__SSE4_1__)
+#if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
 __m128 Normalize4(__m128 value, __m128 mean, __m128 scale) {
     return _mm_mul_ps(_mm_sub_ps(value, mean), scale);
 }
@@ -93,6 +99,9 @@ void StoreMonoQuad(__m128 values, float* destination) {
 
 size_t WriteMonoSse(const uint8_t* source, float* destination, float mean,
                     float scale, size_t count) {
+#if defined(_MSC_VER)
+    if (!platform::HasSse41()) return 0;
+#endif
     const size_t blocks = count / 16;
     const __m128 mean4 = _mm_set1_ps(mean);
     const __m128 scale4 = _mm_set1_ps(scale);
@@ -112,6 +121,9 @@ size_t WriteMonoSse(const uint8_t* source, float* destination, float mean,
 
 size_t WriteTripleSse(const uint8_t* source, float* destination,
                       const float* mean, const float* scale, size_t count) {
+#if defined(_MSC_VER)
+    if (!platform::HasSse41()) return 0;
+#endif
     size_t blocks = 0;
     const size_t candidates = count / 4;
     if (candidates > 1) {
@@ -143,6 +155,9 @@ size_t WriteTripleSse(const uint8_t* source, float* destination,
 size_t WriteMonoQuadSse(const uint8_t* source, float* destination, float mean,
                         float scale, size_t count) {
     std::memset(destination, 0, 4 * sizeof(float) * count);
+#if defined(_MSC_VER)
+    if (!platform::HasSse41()) return 0;
+#endif
     const size_t blocks = count / 16;
     const __m128 mean4 = _mm_set1_ps(mean);
     const __m128 scale4 = _mm_set1_ps(scale);
@@ -162,6 +177,9 @@ size_t WriteMonoQuadSse(const uint8_t* source, float* destination, float mean,
 
 size_t WriteTripleQuadSse(const uint8_t* source, float* destination,
                           const float* mean, const float* scale, size_t count) {
+#if defined(_MSC_VER)
+    if (!platform::HasSse41()) return 0;
+#endif
     size_t blocks = 0;
     const size_t candidates = count / 4;
     if (candidates > 1) {
@@ -194,7 +212,7 @@ size_t WriteTripleQuadSse(const uint8_t* source, float* destination,
 void InterleavedMono(const uint8_t* source, float* destination,
                      const float* mean, const float* scale, size_t count) {
     size_t completed = 0;
-#if defined(INSPIRECV_TASK_USE_SSE) && defined(__SSE4_1__)
+#if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
     completed = WriteMonoSse(source, destination, mean[0], scale[0], count);
 #elif defined(INSPIRECV_TASK_USE_NEON)
     const size_t blocks = count / 16;
@@ -215,7 +233,7 @@ void InterleavedMono(const uint8_t* source, float* destination,
 void InterleavedTriple(const uint8_t* source, float* destination,
                        const float* mean, const float* scale, size_t count) {
     size_t completed = 0;
-#if defined(INSPIRECV_TASK_USE_SSE) && defined(__SSE4_1__)
+#if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
     completed = WriteTripleSse(source, destination, mean, scale, count);
 #elif defined(INSPIRECV_TASK_USE_NEON)
     const size_t blocks = count / 16;
@@ -292,7 +310,7 @@ void InterleavedQuad(const uint8_t* source, float* destination,
 
 void QuadFromMono(const uint8_t* source, float* destination, const float* mean,
                   const float* scale, size_t count) {
-#if defined(INSPIRECV_TASK_USE_SSE) && defined(__SSE4_1__)
+#if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
     const size_t completed =
       WriteMonoQuadSse(source, destination, mean[0], scale[0], count);
     for (size_t pixel = completed; pixel < count; ++pixel) {
@@ -310,7 +328,7 @@ void QuadFromMono(const uint8_t* source, float* destination, const float* mean,
 
 void QuadFromTriple(const uint8_t* source, float* destination, const float* mean,
                     const float* scale, size_t count) {
-#if defined(INSPIRECV_TASK_USE_SSE) && defined(__SSE4_1__)
+#if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
     const size_t completed =
       WriteTripleQuadSse(source, destination, mean, scale, count);
     for (size_t pixel = completed; pixel < count; ++pixel) {

@@ -3,6 +3,15 @@
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+#if defined(_WIN32)
+// The public Image API accepts UTF-8 paths, including Windows user folders.
+#ifndef STBI_WINDOWS_UTF8
+#define STBI_WINDOWS_UTF8
+#endif
+#ifndef STBIW_WINDOWS_UTF8
+#define STBIW_WINDOWS_UTF8
+#endif
+#endif
 #include "stb_image.h"
 #include "stb_image_write.h"
 #include <string>

@@ -29,7 +29,7 @@ uint64_t INSPIRECV_API _now() {
 
 int TimeSpend::is_enable = true;
 
-std::ostream &INSPIRECV_API operator<<(std::ostream &os, const TimeSpend &timer) {
+INSPIRECV_API std::ostream &operator<<(std::ostream &os, const TimeSpend &timer) {
     os << timer.Report();
     return os;
 }

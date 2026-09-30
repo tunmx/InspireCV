@@ -16,7 +16,32 @@ using inspirecv::task::Matrix;
 using inspirecv::task::Point;
 using inspirecv::task::Rect;
 
-#if defined(__GNUC__) && !defined(__clang__)
+#if defined(_MSC_VER) && !defined(__clang__)
+// MSVC uses precise, unfused geometry arithmetic. These bits were independently
+// reproduced with strict Apple Clang/ARM64 and GCC/x86 builds of the generic
+// expressions; the historical GNU/Clang fast-math contracts remain below.
+constexpr uint32_t kPerspectiveInversePerspX = 0xb9939a86;
+constexpr uint32_t kPerspectiveInversePerspY = 0x3b139a86;
+constexpr uint32_t kComposedSkewX = 0xbe866667;
+constexpr uint32_t kComposedSkewY = 0x3e400000;
+constexpr uint32_t kComposedPerspX = 0x00000000;
+constexpr uint32_t kComposedPoint0X = 0x41714821;
+constexpr uint32_t kComposedPoint1X = 0x41a5403f;
+constexpr uint32_t kComposedPoint2X = 0x424a81dd;
+constexpr uint32_t kProjectiveScaleX = 0x3f76f911;
+constexpr uint32_t kProjectiveSkewX = 0xbd4a22c8;
+constexpr uint32_t kProjectiveTranslateX = 0x41274460;
+constexpr uint32_t kProjectiveScaleY = 0x3fc823a8;
+constexpr uint32_t kProjectiveTranslateY = 0x410131e8;
+constexpr uint32_t kProjectivePerspX = 0xbd2a9d3e;
+constexpr uint32_t kProjectivePoint0X = 0x41400000;
+constexpr uint32_t kProjectivePoint0Y = 0x407ffffe;
+constexpr uint32_t kProjectivePoint1Y = 0x3ffffffa;
+constexpr uint32_t kProjectivePoint2X = 0x41b00001;
+constexpr uint32_t kProjectivePoint2Y = 0x41900001;
+constexpr uint32_t kProjectivePoint3X = 0x41100001;
+constexpr uint32_t kProjectivePoint3Y = 0x41700002;
+#elif defined(__GNUC__) && !defined(__clang__)
 #if defined(__x86_64__) || defined(__i386__)
 // GNU/x86 projective mapping uses ordered sums and a rounded float reciprocal,
 // independent of the CPU-specific RCPPS estimate used by fast-math.
@@ -97,7 +122,20 @@ constexpr uint32_t kProjectivePoint3X = 0x41100001;
 constexpr uint32_t kProjectivePoint3Y = 0x41700002;
 #endif
 
+#if defined(_MSC_VER) && !defined(__clang__)
+constexpr uint32_t kProjectiveSkewY = 0xbf21b54c;
+constexpr uint32_t kProjectivePerspY = 0xb9cd7e40;
+constexpr uint32_t kProjectivePerspW = 0x3f87e5ae;
+constexpr uint32_t kProjectivePoint1X = 0x41c80002;
+#else
+constexpr uint32_t kProjectiveSkewY = 0xbf21b54d;
+constexpr uint32_t kProjectivePerspY = 0xb9cd7e80;
+constexpr uint32_t kProjectivePerspW = 0x3f87e5af;
+constexpr uint32_t kProjectivePoint1X = 0x41c80000;
+#endif
+
 #if (!defined(__GNUC__) || defined(__clang__)) && \
+    (!defined(_MSC_VER) || defined(__clang__)) && \
     !defined(__x86_64__) && !defined(_M_X64)
 uint32_t ExpectedComposedSkewX() {
     return inspirecv::GetLibraryInfo().lto_enabled
@@ -141,12 +179,13 @@ void RequirePointBits(const Point* points, size_t count, const uint32_t* expecte
     }
 }
 
-#if defined(__GNUC__) && !defined(__clang__) && \
-    (defined(__x86_64__) || defined(__i386__))
+#if (defined(_MSC_VER) && !defined(__clang__)) || \
+    (defined(__GNUC__) && !defined(__clang__) && \
+     (defined(__x86_64__) || defined(__i386__)))
 void RequireProjectiveBatchBits(const Matrix& matrix, const Point* source,
                                 int count, const uint32_t* expected) {
     // Cover vector-sized batches, scalar tails, different alignments and
-    // aliasing. All must use the same rounded reciprocal on GNU/x86.
+    // aliasing. GNU/x86 and precise MSVC use the same rounded reciprocal.
     for (int padding = 0; padding < 4; ++padding) {
         for (int batch = 1; batch <= count; ++batch) {
             INFO("padding " << padding << ", batch size " << batch);
@@ -264,6 +303,7 @@ TEST_CASE("task_matrix_preserves_numeric_contract",
         Matrix composed;
         composed.setConcat(perspective, affine);
 #if (!defined(__GNUC__) || defined(__clang__)) && \
+    (!defined(_MSC_VER) || defined(__clang__)) && \
     !defined(__x86_64__) && !defined(_M_X64)
         const uint32_t composedSkewX = ExpectedComposedSkewX();
 #else
@@ -282,8 +322,9 @@ TEST_CASE("task_matrix_preserves_numeric_contract",
           kComposedPoint0X, 0xc0a9519e, kComposedPoint1X, 0xc0cb16bb, kComposedPoint2X,
           0xc1117e51, 0x43adecb0, 0x430141ec, 0x41a43c4b, 0xc0d1cc84};
         RequirePointBits(destination, 5, expected);
-#if defined(__GNUC__) && !defined(__clang__) && \
-    (defined(__x86_64__) || defined(__i386__))
+#if (defined(_MSC_VER) && !defined(__clang__)) || \
+    (defined(__GNUC__) && !defined(__clang__) && \
+     (defined(__x86_64__) || defined(__i386__)))
         RequireProjectiveBatchBits(composed, source, 5, expected);
 #endif
     }
@@ -394,6 +435,7 @@ TEST_CASE("task_matrix_preserves_numeric_contract",
         Matrix projective;
         REQUIRE(projective.setPolyToPoly(source4, destination4, 4));
 #if (!defined(__GNUC__) || defined(__clang__)) && \
+    (!defined(_MSC_VER) || defined(__clang__)) && \
     !defined(__x86_64__) && !defined(_M_X64)
         const uint32_t projectiveSkewX = ExpectedProjectiveSkewX();
 #else
@@ -401,18 +443,19 @@ TEST_CASE("task_matrix_preserves_numeric_contract",
 #endif
         RequireMatrixBits(projective,
                           {kProjectiveScaleX, projectiveSkewX, kProjectiveTranslateX,
-                           0xbf21b54d, kProjectiveScaleY, kProjectiveTranslateY,
-                           kProjectivePerspX, 0xb9cd7e80, 0x3f87e5af});
+                           kProjectiveSkewY, kProjectiveScaleY, kProjectiveTranslateY,
+                           kProjectivePerspX, kProjectivePerspY, kProjectivePerspW});
 
         Point mapped[4];
         projective.mapPoints(mapped, source4, 4);
         const uint32_t expected4[] = {kProjectivePoint0X, kProjectivePoint0Y,
-                                      0x41c80000, kProjectivePoint1Y,
+                                      kProjectivePoint1X, kProjectivePoint1Y,
                                       kProjectivePoint2X, kProjectivePoint2Y,
                                       kProjectivePoint3X, kProjectivePoint3Y};
         RequirePointBits(mapped, 4, expected4);
-#if defined(__GNUC__) && !defined(__clang__) && \
-    (defined(__x86_64__) || defined(__i386__))
+#if (defined(_MSC_VER) && !defined(__clang__)) || \
+    (defined(__GNUC__) && !defined(__clang__) && \
+     (defined(__x86_64__) || defined(__i386__)))
         RequireProjectiveBatchBits(projective, source4, 4, expected4);
 #endif
 

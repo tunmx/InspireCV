@@ -23,6 +23,12 @@ typedef struct halide_type_t {
 static inline int halide_type_bytes(const halide_type_t& t) { return (t.bits + 7) / 8; }
 
 template<typename T>
+#if defined(_WIN32)
+// Keep this POD helper local: a host such as MNN can provide a same-named
+// non-POD Halide type with a different MSVC return convention. External
+// inline COMDAT merging would otherwise join incompatible implementations.
+static
+#endif
 inline halide_type_t halide_type_of();
 
 template<>
@@ -38,6 +44,5 @@ inline halide_type_t halide_type_of<uint8_t>() {
 }
 
 #endif // INSPIRECV_STREAMTASK_CORE_ST_TYPES_H_
-
 
 

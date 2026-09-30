@@ -73,8 +73,8 @@ template class Size<int>;
 template class Size<float>;
 template class Size<double>;
 
-template std::ostream &operator<<(std::ostream &os, const Size<int> &size);
-template std::ostream &operator<<(std::ostream &os, const Size<float> &size);
-template std::ostream &operator<<(std::ostream &os, const Size<double> &size);
+template INSPIRECV_API std::ostream &operator<<(std::ostream &os, const Size<int> &size);
+template INSPIRECV_API std::ostream &operator<<(std::ostream &os, const Size<float> &size);
+template INSPIRECV_API std::ostream &operator<<(std::ostream &os, const Size<double> &size);
 
 }  // namespace inspirecv

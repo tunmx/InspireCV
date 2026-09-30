@@ -7,9 +7,9 @@
 
 namespace inspirecv {
 
-const char* INSPIRECV_API GetVersion();
+INSPIRECV_API const char* GetVersion();
 
-const char* INSPIRECV_API GetCVBackend();
+INSPIRECV_API const char* GetCVBackend();
 
 // One process-wide description of the complete InspireCV library. Version,
 // backend, toolchain and optional acceleration information intentionally live
@@ -36,7 +36,7 @@ struct LibraryInfo {
     const char* cxx_flags;
 };
 
-const LibraryInfo& INSPIRECV_API GetLibraryInfo();
+INSPIRECV_API const LibraryInfo& GetLibraryInfo();
 
 void INSPIRECV_API PrintLibraryInfo();
 

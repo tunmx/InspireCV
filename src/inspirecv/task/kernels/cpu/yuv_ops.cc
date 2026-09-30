@@ -5,8 +5,12 @@
 
 #include "inspirecv/task/platform/cpu_features.h"
 
-#if defined(INSPIRECV_TASK_USE_SSE) && defined(__SSE4_1__)
+#if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
+#if defined(_MSC_VER)
+#include <immintrin.h>
+#else
 #include <x86intrin.h>
+#endif
 #endif
 
 namespace inspirecv {
@@ -86,7 +90,7 @@ void ConvertNeon(const uint8_t* source, uint8_t* destination, size_t blocks,
 }
 #endif
 
-#if defined(INSPIRECV_TASK_USE_SSE) && defined(__SSE4_1__)
+#if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
 struct RgbaBlock {
     __m128i quarter[4];
 };
@@ -198,7 +202,7 @@ void Convert(const uint8_t* source, uint8_t* destination, size_t count) {
     const uint8_t* luma = source;
     const uint8_t* vu = source + count;
     size_t completed = 0;
-#if defined(INSPIRECV_TASK_USE_SSE) && defined(__SSE4_1__)
+#if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
     if (platform::HasSse41()) {
         completed = ConvertSse<kOrder>(luma, vu, destination, count);
     }

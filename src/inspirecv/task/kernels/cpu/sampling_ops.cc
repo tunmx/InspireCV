@@ -10,8 +10,12 @@
 #include <arm_neon.h>
 #endif
 
-#if defined(INSPIRECV_TASK_USE_SSE) && defined(__SSE4_1__)
+#if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
+#if defined(_MSC_VER)
+#include <immintrin.h>
+#else
 #include <x86intrin.h>
+#endif
 #endif
 
 namespace inspirecv {
@@ -152,7 +156,7 @@ void BilinearTripleInterior(const uint8_t* source, uint8_t* destination,
     }
 }
 
-#if defined(INSPIRECV_TASK_USE_SSE) && defined(__SSE4_1__)
+#if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
 void NearestQuadSse(const uint8_t* source, uint8_t* destination, Point* line,
                     size_t first, size_t count, size_t width, size_t height,
                     size_t stride) {
@@ -392,7 +396,7 @@ void NearestTriple(const uint8_t* source, uint8_t* destination, Point* line,
 void NearestQuad(const uint8_t* source, uint8_t* destination, Point* line,
                  size_t first, size_t count, size_t /*capacity*/, size_t width,
                  size_t height, size_t stride) {
-#if defined(INSPIRECV_TASK_USE_SSE) && defined(__SSE4_1__)
+#if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
     if (platform::HasSse41()) {
         NearestQuadSse(source, destination, line, first, count, width, height, stride);
         return;
@@ -445,7 +449,7 @@ void BilinearTriple(const uint8_t* source, uint8_t* destination, Point* line,
 void BilinearQuad(const uint8_t* source, uint8_t* destination, Point* line,
                   size_t first, size_t count, size_t /*capacity*/, size_t width,
                   size_t height, size_t stride) {
-#if defined(INSPIRECV_TASK_USE_SSE) && defined(__SSE4_1__)
+#if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
     if (platform::HasSse41()) {
         BilinearQuadSse(source, destination + 4 * first, line, count,
                         width, height, stride);

@@ -245,9 +245,9 @@ std::ostream& operator<<(std::ostream& os, const ImageT<Pixel>& image) {
 
 // Explicit instantiation for common pixel types
 template class ImageT<uint8_t>;
-template std::ostream& operator<< <uint8_t>(std::ostream& os, const ImageT<uint8_t>& image);
+template INSPIRECV_API std::ostream& operator<< <uint8_t>(std::ostream& os, const ImageT<uint8_t>& image);
 
 template class ImageT<float>;
-template std::ostream& operator<< <float>(std::ostream& os, const ImageT<float>& image);
+template INSPIRECV_API std::ostream& operator<< <float>(std::ostream& os, const ImageT<float>& image);
 
 }  // namespace inspirecv

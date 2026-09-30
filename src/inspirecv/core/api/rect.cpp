@@ -184,21 +184,21 @@ template class Rect<int>;
 template class Rect<float>;
 template class Rect<double>;
 
-template Rect<int> Rect<int>::As<int>() const;
-template Rect<float> Rect<int>::As<float>() const;
-template Rect<double> Rect<int>::As<double>() const;
+template INSPIRECV_API Rect<int> Rect<int>::As<int>() const;
+template INSPIRECV_API Rect<float> Rect<int>::As<float>() const;
+template INSPIRECV_API Rect<double> Rect<int>::As<double>() const;
 
-template Rect<int> Rect<float>::As<int>() const;
-template Rect<float> Rect<float>::As<float>() const;
-template Rect<double> Rect<float>::As<double>() const;
+template INSPIRECV_API Rect<int> Rect<float>::As<int>() const;
+template INSPIRECV_API Rect<float> Rect<float>::As<float>() const;
+template INSPIRECV_API Rect<double> Rect<float>::As<double>() const;
 
-template Rect<int> Rect<double>::As<int>() const;
-template Rect<float> Rect<double>::As<float>() const;
-template Rect<double> Rect<double>::As<double>() const;
+template INSPIRECV_API Rect<int> Rect<double>::As<int>() const;
+template INSPIRECV_API Rect<float> Rect<double>::As<float>() const;
+template INSPIRECV_API Rect<double> Rect<double>::As<double>() const;
 
-template std::ostream &operator<<(std::ostream &os, const Rect<int> &rect);
-template std::ostream &operator<<(std::ostream &os, const Rect<float> &rect);
-template std::ostream &operator<<(std::ostream &os, const Rect<double> &rect);
+template INSPIRECV_API std::ostream &operator<<(std::ostream &os, const Rect<int> &rect);
+template INSPIRECV_API std::ostream &operator<<(std::ostream &os, const Rect<float> &rect);
+template INSPIRECV_API std::ostream &operator<<(std::ostream &os, const Rect<double> &rect);
 
 template <typename T>
 Rect<T> MinBoundingRect(const std::vector<Point<T>> &points) {
@@ -224,14 +224,14 @@ Rect<T> ApplyTransformToRect(const Rect<T> &rect, const TransformMatrix &transfo
     return MinBoundingRect(transformed_vertices);
 }
 
-template Rect<int> MinBoundingRect(const std::vector<Point<int>> &points);
-template Rect<float> MinBoundingRect(const std::vector<Point<float>> &points);
-template Rect<double> MinBoundingRect(const std::vector<Point<double>> &points);
+template INSPIRECV_API Rect<int> MinBoundingRect(const std::vector<Point<int>> &points);
+template INSPIRECV_API Rect<float> MinBoundingRect(const std::vector<Point<float>> &points);
+template INSPIRECV_API Rect<double> MinBoundingRect(const std::vector<Point<double>> &points);
 
-template Rect<int> ApplyTransformToRect(const Rect<int> &rect, const TransformMatrix &transform);
-template Rect<float> ApplyTransformToRect(const Rect<float> &rect,
+template INSPIRECV_API Rect<int> ApplyTransformToRect(const Rect<int> &rect, const TransformMatrix &transform);
+template INSPIRECV_API Rect<float> ApplyTransformToRect(const Rect<float> &rect,
                                           const TransformMatrix &transform);
-template Rect<double> ApplyTransformToRect(const Rect<double> &rect,
+template INSPIRECV_API Rect<double> ApplyTransformToRect(const Rect<double> &rect,
                                            const TransformMatrix &transform);
 
 }  // namespace inspirecv

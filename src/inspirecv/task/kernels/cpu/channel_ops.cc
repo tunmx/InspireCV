@@ -8,8 +8,12 @@
 #include <arm_neon.h>
 #endif
 
-#if defined(INSPIRECV_TASK_USE_SSE) && defined(__SSE4_1__)
+#if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
+#if defined(_MSC_VER)
+#include <immintrin.h>
+#else
 #include <x86intrin.h>
+#endif
 #endif
 
 namespace inspirecv {
@@ -152,7 +156,7 @@ void ReverseTriple(const uint8_t* source, uint8_t* destination, size_t count) {
 }
 
 void ReverseQuadColor(const uint8_t* source, uint8_t* destination, size_t count) {
-#if defined(INSPIRECV_TASK_USE_SSE) && defined(__SSE4_1__)
+#if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
     if (platform::HasSse41()) {
         const __m128i order =
           _mm_setr_epi8(2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15);

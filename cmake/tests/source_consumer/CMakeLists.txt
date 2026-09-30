@@ -8,8 +8,13 @@ endif()
 # These host settings are sentinels: add_subdirectory(InspireCV) must not
 # rewrite them.
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO
-    "-O1 -g -DINSPIRECV_HOST_FLAG_SENTINEL" CACHE STRING "" FORCE)
+if(MSVC)
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO
+        "/O1 /Zi /DINSPIRECV_HOST_FLAG_SENTINEL" CACHE STRING "" FORCE)
+else()
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO
+        "-O1 -g -DINSPIRECV_HOST_FLAG_SENTINEL" CACHE STRING "" FORCE)
+endif()
 set(expected_host_flags "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
 set(expected_install_prefix "${CMAKE_BINARY_DIR}/host-prefix")
 set(CMAKE_INSTALL_PREFIX "${expected_install_prefix}" CACHE PATH "" FORCE)
@@ -38,3 +43,32 @@ target_link_libraries(inspirecv_source_consumer PRIVATE InspireCV::inspirecv)
 
 enable_testing()
 add_test(NAME source_api COMMAND inspirecv_source_consumer)
+
+if(WIN32)
+    # InspireFace embeds this exact OBJECT payload into its own DLL. Verify
+    # the public API exports without WINDOWS_EXPORT_ALL_SYMBOLS masking gaps.
+    target_compile_definitions(inspirecv PRIVATE "INSPIRECV_API=__declspec(dllexport)")
+    add_library(inspirecv_embedded SHARED $<TARGET_OBJECTS:inspirecv>
+        halide_cv.cpp halide_host.cpp)
+    set_target_properties(inspirecv_embedded PROPERTIES
+        WINDOWS_EXPORT_ALL_SYMBOLS OFF
+        LINKER_LANGUAGE CXX)
+    target_include_directories(inspirecv_embedded INTERFACE
+        "${INSPIRECV_SOURCE_DIR}/include")
+    target_include_directories(inspirecv_embedded PRIVATE
+        "${INSPIRECV_SOURCE_DIR}/include")
+    target_compile_definitions(inspirecv_embedded INTERFACE
+        "INSPIRECV_API=__declspec(dllimport)")
+    add_executable(inspirecv_embedded_consumer
+        "${CMAKE_CURRENT_LIST_DIR}/../installed_consumer/main.cpp")
+    target_compile_definitions(inspirecv_embedded_consumer PRIVATE
+        INSPIRECV_TEST_EMBEDDED_HALIDE_HOST)
+    target_link_libraries(inspirecv_embedded_consumer PRIVATE inspirecv_embedded)
+    if(MSVC)
+        # Force real helper calls in this ABI regression even in Release.
+        # Production sources retain their normal optimization settings.
+        set_source_files_properties(halide_cv.cpp halide_host.cpp PROPERTIES
+            COMPILE_OPTIONS "/Od;/Ob0")
+    endif()
+    add_test(NAME embedded_dll_api COMMAND inspirecv_embedded_consumer)
+endif()

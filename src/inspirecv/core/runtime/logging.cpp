@@ -49,7 +49,7 @@ ISFLogging::~ISFLogging() {
             case LogSeverity::WARN:
                 android_log_level = ANDROID_LOG_WARN;
                 break;
-            case LogSeverity::ERROR:
+            case LogSeverity::kError:
                 android_log_level = ANDROID_LOG_ERROR;
                 break;
             case LogSeverity::FATAL:

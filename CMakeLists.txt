@@ -67,6 +67,12 @@ set(INSPIRECV_CUDA_ARCHITECTURES "86" CACHE STRING
 set(INSPIRECV_PRIVATE_DEFINITIONS "")
 set(INSPIRECV_PRIVATE_OPTIONS "")
 
+if(MSVC)
+    # The MSVC CRT exposes M_PI only when this is defined before <cmath>.
+    # Keep it target-local so embedding projects retain their own settings.
+    list(APPEND INSPIRECV_PRIVATE_DEFINITIONS _USE_MATH_DEFINES)
+endif()
+
 set(EIGEN3_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/Eigen-3.4.0-Headers")
 
 if(INSPIRECV_BACKEND_OKCV_USE_OPENCV_IO OR INSPIRECV_BACKEND_OKCV_USE_OPENCV_GUI)
@@ -288,8 +294,23 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
                      PROPERTY COMPILE_OPTIONS -ffp-contract=on -Wno-overriding-option)
     endif()
 elseif(MSVC)
+    # Debug keeps the host's /Od, runtime checks and precise arithmetic;
+    # MSVC rejects /O2 together with /RTC1.
     set_property(SOURCE ${INSPIRECV_TASK_FAST_MATH_SOURCES} APPEND
-                 PROPERTY COMPILE_OPTIONS /O2 /fp:fast)
+                 PROPERTY COMPILE_OPTIONS
+                 "$<$<NOT:$<CONFIG:Debug>>:/O2>"
+                 "$<$<NOT:$<CONFIG:Debug>>:/fp:fast>")
+    # MSVC's fast reciprocal can turn an exact scanline step (41/41) into
+    # 0x3f7fffff; reassociation also changes the frozen rotation/composition
+    # rounding. Keep the precise contract local to these translation units.
+    set_property(SOURCE
+                 ${TASK_DIR}/execution/row_schedule.cc
+                 ${TASK_DIR}/geometry/matrix_transform.cc
+                 ${TASK_DIR}/geometry/matrix_mapping.cc
+                 ${TASK_DIR}/geometry/projective_solver.cc
+                 ${TASK_DIR}/geometry/matrix_composition.cc
+                 ${TASK_DIR}/geometry/matrix_inverse.cc APPEND
+                 PROPERTY COMPILE_OPTIONS /fp:precise)
 endif()
 
 set(INSPIRECV_SRC_FILES ${INSPIRECV_SRC_FILES} ${INSPIRECV_TASK_SOURCES})
@@ -470,6 +491,9 @@ inspirecv_check_target_contract(inspirecv "${INSPIRECV_SRC_FILES}")
 
 function(inspirecv_link_consumer target_name)
     target_compile_features(${target_name} PRIVATE cxx_std_14)
+    if(MSVC)
+        target_compile_definitions(${target_name} PRIVATE _USE_MATH_DEFINES)
+    endif()
     target_include_directories(${target_name} PRIVATE
         ${INSPIRECV_CONSUMER_INCLUDE_DIRS})
     if(INSPIRECV_BUILD_OBJECT_LIBS)

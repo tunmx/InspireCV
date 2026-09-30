@@ -204,42 +204,42 @@ TransformMatrix SimilarityTransformEstimateUmeyama(const std::vector<Point<T>> &
     return mat;
 }
 
-template Point<int> Point<float>::As<int>() const;
-template Point<float> Point<int>::As<float>() const;
-template Point<double> Point<float>::As<double>() const;
-template Point<float> Point<double>::As<float>() const;
-template Point<int> Point<double>::As<int>() const;
-template Point<double> Point<int>::As<double>() const;
+template INSPIRECV_API Point<int> Point<float>::As<int>() const;
+template INSPIRECV_API Point<float> Point<int>::As<float>() const;
+template INSPIRECV_API Point<double> Point<float>::As<double>() const;
+template INSPIRECV_API Point<float> Point<double>::As<float>() const;
+template INSPIRECV_API Point<int> Point<double>::As<int>() const;
+template INSPIRECV_API Point<double> Point<int>::As<double>() const;
 
 template class Point<int>;
 template class Point<float>;
 template class Point<double>;
 
-template std::ostream &operator<<(std::ostream &os, const Point<int> &point);
-template std::ostream &operator<<(std::ostream &os, const Point<float> &point);
-template std::ostream &operator<<(std::ostream &os, const Point<double> &point);
+template INSPIRECV_API std::ostream &operator<<(std::ostream &os, const Point<int> &point);
+template INSPIRECV_API std::ostream &operator<<(std::ostream &os, const Point<float> &point);
+template INSPIRECV_API std::ostream &operator<<(std::ostream &os, const Point<double> &point);
 
-template std::ostream &operator<<(std::ostream &os, const std::vector<Point<int>> &points);
-template std::ostream &operator<<(std::ostream &os, const std::vector<Point<float>> &points);
-template std::ostream &operator<<(std::ostream &os, const std::vector<Point<double>> &points);
+template INSPIRECV_API std::ostream &operator<<(std::ostream &os, const std::vector<Point<int>> &points);
+template INSPIRECV_API std::ostream &operator<<(std::ostream &os, const std::vector<Point<float>> &points);
+template INSPIRECV_API std::ostream &operator<<(std::ostream &os, const std::vector<Point<double>> &points);
 
-template std::vector<Point<int>> ApplyTransformToPoints(const std::vector<Point<int>> &points,
+template INSPIRECV_API std::vector<Point<int>> ApplyTransformToPoints(const std::vector<Point<int>> &points,
                                                         const TransformMatrix &transform);
-template std::vector<Point<float>> ApplyTransformToPoints(const std::vector<Point<float>> &points,
+template INSPIRECV_API std::vector<Point<float>> ApplyTransformToPoints(const std::vector<Point<float>> &points,
                                                           const TransformMatrix &transform);
-template std::vector<Point<double>> ApplyTransformToPoints(const std::vector<Point<double>> &points,
+template INSPIRECV_API std::vector<Point<double>> ApplyTransformToPoints(const std::vector<Point<double>> &points,
                                                            const TransformMatrix &transform);
-template TransformMatrix SimilarityTransformEstimate(const std::vector<Point<int>> &src_points,
+template INSPIRECV_API TransformMatrix SimilarityTransformEstimate(const std::vector<Point<int>> &src_points,
                                                      const std::vector<Point<int>> &dst_points);
-template TransformMatrix SimilarityTransformEstimate(const std::vector<Point<float>> &src_points,
+template INSPIRECV_API TransformMatrix SimilarityTransformEstimate(const std::vector<Point<float>> &src_points,
                                                      const std::vector<Point<float>> &dst_points);
-template TransformMatrix SimilarityTransformEstimate(const std::vector<Point<double>> &src_points,
+template INSPIRECV_API TransformMatrix SimilarityTransformEstimate(const std::vector<Point<double>> &src_points,
                                                      const std::vector<Point<double>> &dst_points);
-template TransformMatrix SimilarityTransformEstimateUmeyama(const std::vector<Point<int>> &src_points,
+template INSPIRECV_API TransformMatrix SimilarityTransformEstimateUmeyama(const std::vector<Point<int>> &src_points,
                                                      const std::vector<Point<int>> &dst_points);
-template TransformMatrix SimilarityTransformEstimateUmeyama(const std::vector<Point<float>> &src_points,
+template INSPIRECV_API TransformMatrix SimilarityTransformEstimateUmeyama(const std::vector<Point<float>> &src_points,
                                                      const std::vector<Point<float>> &dst_points);
-template TransformMatrix SimilarityTransformEstimateUmeyama(const std::vector<Point<double>> &src_points,
+template INSPIRECV_API TransformMatrix SimilarityTransformEstimateUmeyama(const std::vector<Point<double>> &src_points,
                                                      const std::vector<Point<double>> &dst_points);
                                                      
 }  // namespace inspirecv

@@ -131,7 +131,7 @@ private:
 
     friend class Impl;
     template<typename P>
-    friend std::ostream& operator<<(std::ostream& os, const ImageT<P>& image);
+    friend INSPIRECV_API std::ostream& operator<<(std::ostream& os, const ImageT<P>& image);
     template<typename> friend class ImageT;  // allow cross-Pixel access to impl_
 };
 

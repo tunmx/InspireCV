@@ -5,6 +5,32 @@
 #include <cstring>
 #include <cmath>
 #include <sstream>
+#include <cstdio>
+
+#if defined(_WIN32) && !INSPIRECV_TEST_BACKEND_OPENCV
+TEST_CASE("image_io_preserves_utf8_windows_paths", "[image][io][windows][regression]") {
+    const char* path = u8"inspirecv \u4e2d\u6587 image.png";
+    const wchar_t* wide_path = L"inspirecv \u4e2d\u6587 image.png";
+    struct RemoveFile {
+        const wchar_t* path;
+        ~RemoveFile() { _wremove(path); }
+    } cleanup{wide_path};
+    const uint8_t pixels[] = {1, 2, 3, 40, 50, 60, 70, 80, 90, 200, 210, 220};
+    const auto original = inspirecv::Image::Create(2, 2, 3, pixels);
+    REQUIRE(original.Write(path));
+    // Check the intended UTF-16 name, so a roundtrip through the same wrong
+    // ANSI filename cannot make this test pass accidentally.
+    std::FILE* file = nullptr;
+    const errno_t open_result = _wfopen_s(&file, wide_path, L"rb");
+    if (file != nullptr) std::fclose(file);
+    REQUIRE(open_result == 0);
+    const auto decoded = inspirecv::Image::Create(path, 3);
+    REQUIRE(decoded.Width() == 2);
+    REQUIRE(decoded.Height() == 2);
+    REQUIRE(decoded.Channels() == 3);
+    REQUIRE_EQ_C_ARRAY(decoded.Data(), pixels, sizeof(pixels));
+}
+#endif
 
 TEST_CASE("image_construct_and_properties_u8", "[image][basic]") {
     using inspirecv::Image;
@@ -81,5 +107,4 @@ TEST_CASE("image_construct_and_properties_u8", "[image][basic]") {
         REQUIRE_EQ_C_ARRAY(moved.Data(), before.Data(), 2 * 2 * 3);
     }
 }
-
 

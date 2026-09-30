@@ -20,7 +20,7 @@ enum class Status : uint8_t {
     kNonInvertibleTransform = 8,
 };
 
-const char* INSPIRECV_API StatusMessage(Status status);
+INSPIRECV_API const char* StatusMessage(Status status);
 
 }  // namespace task
 }  // namespace inspirecv

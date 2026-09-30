@@ -1,4 +1,4 @@
-#if defined(__x86_64__) || defined(__i386__)
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
 #include <immintrin.h>
 #include <stddef.h>
 extern "C" void inspirecv_task_copy_avx2(void* dst, const void* src, size_t n) {
