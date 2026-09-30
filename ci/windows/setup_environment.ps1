@@ -13,7 +13,8 @@ if (!(Test-Path $developerCommand)) { throw 'Visual Studio developer environment
 
 # Keep compiler setup separate from the build entry point. Only toolchain
 # variables are persisted to subsequent Actions steps.
-$developerEnvironment = & $env:ComSpec /d /s /c "`"`"$developerCommand`" -no_logo -arch=x64 -host_arch=x64 >nul && set`""
+# CALL keeps a quoted Visual Studio path intact when PowerShell invokes cmd.exe.
+$developerEnvironment = & $env:ComSpec /d /s /c "call `"$developerCommand`" -no_logo -arch=x64 -host_arch=x64 >nul && set"
 if ($LASTEXITCODE -ne 0) { throw 'Failed to initialize the x64 Visual Studio environment.' }
 $toolchainNames = @('PATH', 'INCLUDE', 'LIB', 'LIBPATH', 'VSINSTALLDIR',
     'VCINSTALLDIR', 'VCToolsInstallDir', 'VCToolsVersion', 'VisualStudioVersion',
