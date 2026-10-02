@@ -10,10 +10,16 @@ void SwapRbU8C3(const uint8_t* source, uint8_t* destination,
                 int width, int height);
 
 void FlipHorizontalU8C3(const uint8_t* source, uint8_t* destination,
-                        int width, int height);
+                        int width, int height, bool reverse_rows = false);
 
 void Rotate90U8C3(const uint8_t* source, uint8_t* destination,
                   int width, int height);
+
+void Rotate270U8C3(const uint8_t* source, uint8_t* destination,
+                   int width, int height);
+
+void ResizeBilinear2xU8C3(const uint8_t* source, uint8_t* destination,
+                         int width, int height);
 
 }  // namespace x86
 }  // namespace okcv

@@ -133,8 +133,8 @@ RgbaBlock DecodeBlock16(const uint8_t* luma, const uint8_t* vu) {
       _mm_mulhi_epi16(_mm_sub_epi16(y_even, g_bias), shift),
       _mm_mulhi_epi16(_mm_sub_epi16(y_odd, g_bias), shift));
     __m128i blue = _mm_packus_epi16(
-      _mm_mulhi_epi16(_mm_add_epi16(y_even, b_bias), shift),
-      _mm_mulhi_epi16(_mm_add_epi16(y_odd, b_bias), shift));
+      _mm_mulhi_epi16(_mm_adds_epi16(y_even, b_bias), shift),
+      _mm_mulhi_epi16(_mm_adds_epi16(y_odd, b_bias), shift));
     red = _mm_shuffle_epi8(red, restore_order);
     green = _mm_shuffle_epi8(green, restore_order);
     blue = _mm_shuffle_epi8(blue, restore_order);
@@ -185,10 +185,9 @@ size_t ConvertSse(const uint8_t* luma, const uint8_t* vu, uint8_t* destination,
                   size_t count) {
     constexpr size_t kChannels =
       kOrder == PixelOrder::kRgb || kOrder == PixelOrder::kBgr ? 3 : 4;
-    constexpr size_t kReservedBlocks = kChannels == 3 ? 2 : 1;
-    const size_t available_blocks = count / 16;
-    const size_t blocks =
-      available_blocks > kReservedBlocks ? available_blocks - kReservedBlocks : 0;
+    // Both loads and stores cover exactly one 16-pixel block. No trailing
+    // blocks need to be reserved for over-read/over-write protection.
+    const size_t blocks = count / 16;
     for (size_t block = 0; block < blocks; ++block) {
         StoreBlock16<kOrder>(destination + kChannels * 16 * block,
                              DecodeBlock16(luma + 16 * block, vu + 16 * block));

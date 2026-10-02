@@ -21,6 +21,8 @@
 #include <cstring>
 #include <cctype>
 #include "check.h"
+#include "inspirecv/core/runtime/cpu_features.h"
+#include "inspirecv/backends/okcv/kernels/x86/u8c3_ops.h"
 
 namespace okcv {
 
@@ -76,6 +78,22 @@ private:
     // Static member variable declaration compatible with C++14
     static std::string lastError;
 
+    static void SwapColor(const unsigned char* source, unsigned char* destination,
+                          int width, int height) {
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+        if (inspirecv::cpu::HasSsse3()) {
+            x86::SwapRbU8C3(source, destination, width, height);
+            return;
+        }
+#endif
+        const size_t pixels = static_cast<size_t>(width) * height;
+        for (size_t i = 0; i < pixels; ++i) {
+            destination[i * 3] = source[i * 3 + 2];
+            destination[i * 3 + 1] = source[i * 3 + 1];
+            destination[i * 3 + 2] = source[i * 3];
+        }
+    }
+
 public:
     // Get last error message
     static std::string GetLastError() {
@@ -111,11 +129,7 @@ public:
         // Only convert if 3 channels and input is BGR
         if (channels == 3 && config.color_order == ColorOrder::BGR) {
             rgb_data.resize(static_cast<size_t>(width) * height * channels);
-            for (int i = 0; i < width * height; ++i) {
-                rgb_data[i * 3 + 0] = data[i * 3 + 2];  // R <- B
-                rgb_data[i * 3 + 1] = data[i * 3 + 1];  // G <- G
-                rgb_data[i * 3 + 2] = data[i * 3 + 0];  // B <- R
-            }
+            SwapColor(data, rgb_data.data(), width, height);
             write_data = rgb_data.data();
         }
 
@@ -170,11 +184,7 @@ public:
         // Only convert if 3 channels and input is BGR
         if (data.channels == 3 && config.color_order == ColorOrder::BGR) {
             rgb_data.resize(data.getDataSize());
-            for (size_t i = 0; i < data.width * data.height; ++i) {
-                rgb_data[i * 3 + 0] = data.data[i * 3 + 2];  // R <- B
-                rgb_data[i * 3 + 1] = data.data[i * 3 + 1];  // G <- G
-                rgb_data[i * 3 + 2] = data.data[i * 3 + 0];  // B <- R
-            }
+            SwapColor(data.data.data(), rgb_data.data(), data.width, data.height);
             write_data = rgb_data.data();
         }
 
@@ -251,11 +261,7 @@ public:
         }
         // Convert to BGR if needed
         else if (order == ColorOrder::BGR && requestedChannels == 3) {
-            for (int i = 0; i < width * height; ++i) {
-                outData.data[i * 3 + 0] = data[i * 3 + 2];  // B <- R
-                outData.data[i * 3 + 1] = data[i * 3 + 1];  // G <- G
-                outData.data[i * 3 + 2] = data[i * 3 + 0];  // R <- B
-            }
+            SwapColor(data, outData.data.data(), width, height);
         }
 
         // Free stb allocated memory

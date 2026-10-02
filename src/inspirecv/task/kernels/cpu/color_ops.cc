@@ -3,6 +3,11 @@
 #include <algorithm>
 #include <cstring>
 
+#include "inspirecv/task/platform/cpu_features.h"
+#if defined(INSPIRECV_TASK_HAVE_AVX2_KERNELS)
+#include "inspirecv/task/kernels/x86/avx2_kernels.h"
+#endif
+
 namespace inspirecv {
 namespace task {
 namespace kernels {
@@ -61,6 +66,14 @@ int RoundedShift(int value, int shift) {
 template <PackedOrder kOrder>
 void ApplyMatrix(const uint8_t* source, uint8_t* destination, size_t count,
                  const FixedMatrix& matrix) {
+#if defined(INSPIRECV_TASK_HAVE_AVX2_KERNELS)
+    if (count >= 8 && platform::HasAvx2()) {
+        const size_t completed = x86::ColorMatrixAvx2(source, destination, count, matrix.coefficient, matrix.shift, matrix.offset, matrix.clamp, kOrder == PackedOrder::kBgr);
+        source += 3 * completed;
+        destination += 3 * completed;
+        count -= completed;
+    }
+#endif
     while (count-- != 0) {
         const RgbPixel pixel = LoadRgb<kOrder>(source);
         const int input[3] = {pixel.red, pixel.green, pixel.blue};
@@ -79,17 +92,33 @@ void ApplyMatrix(const uint8_t* source, uint8_t* destination, size_t count,
 
 template <PackedOrder kOrder, int kHueRange>
 void ConvertHsv(const uint8_t* source, uint8_t* destination, size_t count) {
+#if defined(INSPIRECV_TASK_HAVE_AVX2_KERNELS) && defined(INSPIRECV_TASK_MSVC_FAST_HSV) && INSPIRECV_TASK_MSVC_FAST_HSV
+    // MSVC's optimized scalar expression uses a direct quotient, matched by
+    // this AVX2 kernel. GCC/Clang retain their historical auto-vectorized
+    // reciprocal arithmetic; precise MSVC Debug retains its scalar formula.
+    if (count >= 8 && platform::HasAvx2()) {
+        const size_t completed = x86::ColorHsvAvx2(source, destination, count, kHueRange, kOrder == PackedOrder::kBgr);
+        source += 3 * completed;
+        destination += 3 * completed;
+        count -= completed;
+    }
+#endif
     while (count-- != 0) {
         const RgbPixel pixel = LoadRgb<kOrder>(source);
         const int minimum = std::min(pixel.red, std::min(pixel.green, pixel.blue));
         const int maximum = std::max(pixel.red, std::max(pixel.green, pixel.blue));
-        const uint8_t difference = ClampByte(maximum - minimum);
+        // Byte-channel extrema guarantee 0 <= difference <= 255. Keep the
+        // subtraction in int to avoid redundant narrowing in vectorized loops.
+        const int difference = maximum - minimum;
         const int redMask = maximum == pixel.red ? -1 : 0;
         const int greenMask = maximum == pixel.green ? -1 : 0;
 
+        // Safe denominators give H=S=0 for achromatic colors. Keeping this
+        // branchless preserves the existing compiler vectorization and its
+        // observable rounding for non-achromatic input.
         const int saturation =
           (static_cast<int>(difference * (255 << 12) *
-                            (1.0f / static_cast<float>(maximum))) +
+                            (1.0f / static_cast<float>(std::max(maximum, 1)))) +
            (1 << 11)) >>
           12;
         int hue =
@@ -98,7 +127,7 @@ void ConvertHsv(const uint8_t* source, uint8_t* destination, size_t count) {
            ((greenMask & (pixel.blue - pixel.red + 2 * difference)) +
             (~greenMask & (pixel.red - pixel.green + 4 * difference))));
         hue = (hue * static_cast<int>((kHueRange << 12) /
-                                      (6.0f * difference) + 0.5f) +
+                                      (6.0f * std::max<int>(difference, 1)) + 0.5f) +
                (1 << 11)) >>
               12;
         if (hue < 0) hue += kHueRange;
@@ -113,6 +142,14 @@ void ConvertHsv(const uint8_t* source, uint8_t* destination, size_t count) {
 
 template <PackedOrder kOrder, bool kGreenHasSixBits>
 void PackBgr16(const uint8_t* source, uint8_t* destination, size_t count) {
+#if defined(INSPIRECV_TASK_HAVE_AVX2_KERNELS)
+    if (count >= 8 && platform::HasAvx2()) {
+        const size_t completed = x86::PackBgr16Avx2(source, destination, count, kGreenHasSixBits, kOrder == PackedOrder::kBgr);
+        source += 3 * completed;
+        destination += 2 * completed;
+        count -= completed;
+    }
+#endif
     while (count-- != 0) {
         const RgbPixel pixel = LoadRgb<kOrder>(source);
         const uint16_t packed = kGreenHasSixBits

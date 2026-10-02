@@ -4,6 +4,10 @@
 
 #include "inspirecv/task/platform/cpu_features.h"
 
+#if defined(INSPIRECV_TASK_HAVE_AVX2_KERNELS)
+#include "inspirecv/task/kernels/x86/avx2_kernels.h"
+#endif
+
 #if defined(INSPIRECV_TASK_USE_NEON)
 #include <arm_neon.h>
 #endif
@@ -73,6 +77,13 @@ void inspirecv_task_c3_to_float_c4_arm(const uint8_t*, float*, const float*,
 #endif
 
 #if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
+__m128i LoadTriple4(const uint8_t* source) {
+    const __m128i first = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(source));
+    int32_t last;
+    std::memcpy(&last, source + 8, sizeof(last));
+    return _mm_unpacklo_epi64(first, _mm_cvtsi32_si128(last));
+}
+
 __m128 Normalize4(__m128 value, __m128 mean, __m128 scale) {
     return _mm_mul_ps(_mm_sub_ps(value, mean), scale);
 }
@@ -99,9 +110,7 @@ void StoreMonoQuad(__m128 values, float* destination) {
 
 size_t WriteMonoSse(const uint8_t* source, float* destination, float mean,
                     float scale, size_t count) {
-#if defined(_MSC_VER)
     if (!platform::HasSse41()) return 0;
-#endif
     const size_t blocks = count / 16;
     const __m128 mean4 = _mm_set1_ps(mean);
     const __m128 scale4 = _mm_set1_ps(scale);
@@ -121,15 +130,8 @@ size_t WriteMonoSse(const uint8_t* source, float* destination, float mean,
 
 size_t WriteTripleSse(const uint8_t* source, float* destination,
                       const float* mean, const float* scale, size_t count) {
-#if defined(_MSC_VER)
     if (!platform::HasSse41()) return 0;
-#endif
-    size_t blocks = 0;
-    const size_t candidates = count / 4;
-    if (candidates > 1) {
-        blocks = candidates;
-        if ((count % 4) * 3 < 4) --blocks;
-    }
+    const size_t blocks = count / 4;
     const __m128 means[3] = {
       _mm_setr_ps(mean[0], mean[1], mean[2], mean[0]),
       _mm_setr_ps(mean[1], mean[2], mean[0], mean[1]),
@@ -139,8 +141,7 @@ size_t WriteTripleSse(const uint8_t* source, float* destination,
       _mm_setr_ps(scale[1], scale[2], scale[0], scale[1]),
       _mm_setr_ps(scale[2], scale[0], scale[1], scale[2])};
     for (size_t block = 0; block < blocks; ++block) {
-        const __m128i bytes = _mm_loadu_si128(
-          reinterpret_cast<const __m128i*>(source + 12 * block));
+        const __m128i bytes = LoadTriple4(source + 12 * block);
         const ByteGroups groups = SplitBytes(bytes);
         for (size_t group = 0; group < 3; ++group) {
             const __m128 values = _mm_cvtepi32_ps(
@@ -154,10 +155,7 @@ size_t WriteTripleSse(const uint8_t* source, float* destination,
 
 size_t WriteMonoQuadSse(const uint8_t* source, float* destination, float mean,
                         float scale, size_t count) {
-    std::memset(destination, 0, 4 * sizeof(float) * count);
-#if defined(_MSC_VER)
     if (!platform::HasSse41()) return 0;
-#endif
     const size_t blocks = count / 16;
     const __m128 mean4 = _mm_set1_ps(mean);
     const __m128 scale4 = _mm_set1_ps(scale);
@@ -177,15 +175,8 @@ size_t WriteMonoQuadSse(const uint8_t* source, float* destination, float mean,
 
 size_t WriteTripleQuadSse(const uint8_t* source, float* destination,
                           const float* mean, const float* scale, size_t count) {
-#if defined(_MSC_VER)
     if (!platform::HasSse41()) return 0;
-#endif
-    size_t blocks = 0;
-    const size_t candidates = count / 4;
-    if (candidates > 1) {
-        blocks = candidates;
-        if ((count % 4) * 3 < 4) --blocks;
-    }
+    const size_t blocks = count / 4;
     const __m128 mean4 = _mm_setr_ps(mean[0], mean[1], mean[2], 0.0f);
     const __m128 scale4 = _mm_setr_ps(scale[0], scale[1], scale[2], 0.0f);
     const __m128i selectors[4] = {
@@ -194,8 +185,7 @@ size_t WriteTripleQuadSse(const uint8_t* source, float* destination,
       _mm_setr_epi8(6, 7, 8, 6, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15),
       _mm_setr_epi8(9, 10, 11, 9, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15)};
     for (size_t block = 0; block < blocks; ++block) {
-        const __m128i bytes = _mm_loadu_si128(
-          reinterpret_cast<const __m128i*>(source + 12 * block));
+        const __m128i bytes = LoadTriple4(source + 12 * block);
         for (size_t pixel = 0; pixel < 4; ++pixel) {
             const __m128 values = _mm_cvtepi32_ps(
               _mm_cvtepu8_epi32(_mm_shuffle_epi8(bytes, selectors[pixel])));
@@ -205,12 +195,57 @@ size_t WriteTripleQuadSse(const uint8_t* source, float* destination,
     }
     return blocks * 4;
 }
+size_t WritePlanarTripleSse(const uint8_t* source, float* destination,
+                            size_t channel_stride, const float* mean,
+                            const float* scale, size_t count) {
+    if (!platform::HasSse41()) return 0;
+    const __m128 means[3] = {_mm_set1_ps(mean[0]), _mm_set1_ps(mean[1]), _mm_set1_ps(mean[2])};
+    const __m128 scales[3] = {_mm_set1_ps(scale[0]), _mm_set1_ps(scale[1]), _mm_set1_ps(scale[2])};
+    const __m128i order[3] = {
+      _mm_setr_epi8(0, 3, 6, 9, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+      _mm_setr_epi8(1, 4, 7, 10, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+      _mm_setr_epi8(2, 5, 8, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1)};
+    const size_t blocks = count / 4;
+    for (size_t block = 0; block < blocks; ++block) {
+        const __m128i bytes = LoadTriple4(source + 12 * block);
+        for (size_t channel = 0; channel < 3; ++channel) {
+            const __m128 values = _mm_cvtepi32_ps(_mm_cvtepu8_epi32(_mm_shuffle_epi8(bytes, order[channel])));
+            _mm_storeu_ps(destination + channel_stride * channel + 4 * block,
+                           Normalize4(values, means[channel], scales[channel]));
+        }
+    }
+    return blocks * 4;
+}
+
+size_t WriteQuadSse(const uint8_t* source, float* destination,
+                    const float* mean, const float* scale, size_t count) {
+    if (!platform::HasSse41()) return 0;
+    const __m128 means = _mm_loadu_ps(mean);
+    const __m128 scales = _mm_loadu_ps(scale);
+    const size_t blocks = count / 4;
+    for (size_t block = 0; block < blocks; ++block) {
+        const __m128i bytes = _mm_loadu_si128(reinterpret_cast<const __m128i*>(source + 16 * block));
+        const ByteGroups groups = SplitBytes(bytes);
+        for (size_t pixel = 0; pixel < 4; ++pixel) {
+            const __m128 values = _mm_cvtepi32_ps(_mm_cvtepu8_epi32(groups.value[pixel]));
+            _mm_storeu_ps(destination + 16 * block + 4 * pixel, Normalize4(values, means, scales));
+        }
+    }
+    return blocks * 4;
+}
+
 #endif
 
 }  // namespace
 
 void InterleavedMono(const uint8_t* source, float* destination,
                      const float* mean, const float* scale, size_t count) {
+#if defined(INSPIRECV_TASK_HAVE_AVX2_KERNELS)
+    if (count >= 8 && platform::HasAvx2()) {
+        x86::InterleavedMonoAvx2(source, destination, mean, scale, count);
+        return;
+    }
+#endif
     size_t completed = 0;
 #if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
     completed = WriteMonoSse(source, destination, mean[0], scale[0], count);
@@ -232,6 +267,12 @@ void InterleavedMono(const uint8_t* source, float* destination,
 
 void InterleavedTriple(const uint8_t* source, float* destination,
                        const float* mean, const float* scale, size_t count) {
+#if defined(INSPIRECV_TASK_HAVE_AVX2_KERNELS)
+    if (count >= 8 && platform::HasAvx2()) {
+        x86::InterleavedTripleAvx2(source, destination, mean, scale, count);
+        return;
+    }
+#endif
     size_t completed = 0;
 #if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
     completed = WriteTripleSse(source, destination, mean, scale, count);
@@ -265,10 +306,18 @@ void InterleavedTriple(const uint8_t* source, float* destination,
 
 void PlanarTriple(const uint8_t* source, float* destination, size_t channel_stride,
                   const float* mean, const float* scale, size_t count) {
+#if defined(INSPIRECV_TASK_HAVE_AVX2_KERNELS)
+    if (count >= 8 && platform::HasAvx2()) {
+        x86::PlanarTripleAvx2(source, destination, channel_stride, mean, scale, count);
+        return;
+    }
+#endif
     float* planes[3] = {destination, destination + channel_stride,
                         destination + 2 * channel_stride};
     size_t completed = 0;
-#if defined(INSPIRECV_TASK_USE_NEON)
+#if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
+    completed = WritePlanarTripleSse(source, destination, channel_stride, mean, scale, count);
+#elif defined(INSPIRECV_TASK_USE_NEON)
     const size_t blocks = count / 16;
     float32x4_t offsets[3];
     float32x4_t multipliers[3];
@@ -300,7 +349,17 @@ void PlanarTriple(const uint8_t* source, float* destination, size_t channel_stri
 
 void InterleavedQuad(const uint8_t* source, float* destination,
                      const float* mean, const float* scale, size_t count) {
-    for (size_t pixel = 0; pixel < count; ++pixel) {
+#if defined(INSPIRECV_TASK_HAVE_AVX2_KERNELS)
+    if (count >= 8 && platform::HasAvx2()) {
+        x86::InterleavedQuadAvx2(source, destination, mean, scale, count);
+        return;
+    }
+#endif
+    size_t completed = 0;
+#if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
+    completed = WriteQuadSse(source, destination, mean, scale, count);
+#endif
+    for (size_t pixel = completed; pixel < count; ++pixel) {
         for (size_t channel = 0; channel < 4; ++channel) {
             destination[4 * pixel + channel] =
               Normalize(source[4 * pixel + channel], mean[channel], scale[channel]);
@@ -310,11 +369,20 @@ void InterleavedQuad(const uint8_t* source, float* destination,
 
 void QuadFromMono(const uint8_t* source, float* destination, const float* mean,
                   const float* scale, size_t count) {
+#if defined(INSPIRECV_TASK_HAVE_AVX2_KERNELS)
+    if (count >= 8 && platform::HasAvx2()) {
+        x86::QuadFromMonoAvx2(source, destination, mean, scale, count);
+        return;
+    }
+#endif
 #if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
     const size_t completed =
       WriteMonoQuadSse(source, destination, mean[0], scale[0], count);
     for (size_t pixel = completed; pixel < count; ++pixel) {
         destination[4 * pixel] = Normalize(source[pixel], mean[0], scale[0]);
+        destination[4 * pixel + 1] = 0.0f;
+        destination[4 * pixel + 2] = 0.0f;
+        destination[4 * pixel + 3] = 0.0f;
     }
 #elif defined(INSPIRECV_TASK_USE_NEON)
     inspirecv_task_c1_to_float_c4_arm(source, destination, mean, scale, count);
@@ -328,6 +396,12 @@ void QuadFromMono(const uint8_t* source, float* destination, const float* mean,
 
 void QuadFromTriple(const uint8_t* source, float* destination, const float* mean,
                     const float* scale, size_t count) {
+#if defined(INSPIRECV_TASK_HAVE_AVX2_KERNELS)
+    if (count >= 8 && platform::HasAvx2()) {
+        x86::QuadFromTripleAvx2(source, destination, mean, scale, count);
+        return;
+    }
+#endif
 #if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
     const size_t completed =
       WriteTripleQuadSse(source, destination, mean, scale, count);

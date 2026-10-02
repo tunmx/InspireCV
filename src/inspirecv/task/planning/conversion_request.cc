@@ -1,6 +1,7 @@
 #include "inspirecv/task/planning/conversion_request.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 
@@ -26,6 +27,16 @@ TaskStatus ValidateSamplingOptions(const PipelineConfig& config) {
     return SUCCESS;
 }
 
+// A RawImageView has one row stride. For I420 the U/V stride is half
+// the padded luma stride; odd tightly packed legacy images retain ceil(W/2).
+bool ValidSourceStride(StreamFormat format, int width, int height, int stride) {
+    if (format != YUV_NV12 && format != YUV_NV21 && format != YUV_I420) return true;
+    if (stride != 0 && stride < width) return false;
+    if (format == YUV_I420 && stride > width &&
+        ((stride & 1) != 0 || (width & 1) != 0 || (height & 1) != 0)) return false;
+    return true;
+}
+
 }  // namespace
 
 int ChannelCount(StreamFormat format) {
@@ -35,6 +46,7 @@ int ChannelCount(StreamFormat format) {
         case YCrCb:
         case YUV:
         case HSV:
+        case HSV_FULL:
         case XYZ:
             return 3;
         case RGBA:
@@ -60,11 +72,27 @@ TaskStatus ResolveImageRequest(const PipelineConfig& config, const uint8_t* sour
                                        ? ChannelCount(config.destination_format)
                                        : requested_destination_channels;
     const int destination_element_bytes = halide_type_bytes(destination_type);
+    const int format_channels = ChannelCount(config.destination_format);
+    const bool padded_float = destination_type.code == halide_type_float &&
+                              destination_channels == 4 &&
+                              (config.destination_format == GRAY ||
+                               config.destination_format == RGB ||
+                               config.destination_format == BGR);
 
     if (!request || !source || !destination || source_width <= 0 || source_height <= 0 ||
         destination_width <= 0 || destination_height <= 0 || source_stride < 0 ||
         destination_stride < 0 || destination_channels <= 0 ||
-        !IsSupportedOutputType(destination_type) || destination_element_bytes <= 0) {
+        !IsSupportedOutputType(destination_type) || destination_element_bytes <= 0 ||
+        !ValidSourceStride(config.source_format, source_width, source_height, source_stride) ||
+        (destination_channels != format_channels && !padded_float)) {
+        return INPUT_DATA_ERROR;
+    }
+
+    // SIMD loads/stores need no vector alignment, but the scalar tails and
+    // planar addressing still operate on real float elements.
+    if (destination_type.code == halide_type_float &&
+        (reinterpret_cast<uintptr_t>(destination) % alignof(float) != 0 ||
+         destination_stride % alignof(float) != 0)) {
         return INPUT_DATA_ERROR;
     }
 
@@ -124,7 +152,11 @@ TaskStatus ResolveTensorRequest(const PipelineConfig& config, const uint8_t* sou
     const int expected_channels = ChannelCount(config.destination_format);
     if (!request || !source || !output.data || source_width <= 0 || source_height <= 0 ||
         source_stride < 0 || output.width <= 0 || output.height <= 0 || !is_float32 ||
-        (output.channels != 1 && output.channels != 3) || output.channels != expected_channels) {
+        (output.channels != 1 && output.channels != 3) || output.channels != expected_channels ||
+        !ValidSourceStride(config.source_format, source_width, source_height, source_stride) ||
+        reinterpret_cast<uintptr_t>(output.data) % alignof(float) != 0 ||
+        output.rowStride % sizeof(float) != 0 ||
+        output.channelStride % sizeof(float) != 0) {
         return INPUT_DATA_ERROR;
     }
 

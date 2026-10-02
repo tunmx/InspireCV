@@ -104,8 +104,12 @@ struct YuvSampleBaseline {
     uint64_t p0_hash;
 };
 
-// These digests freeze both the normalized NV21-style temporary layout and
-// the compact odd-height chroma behavior of P0.
+// These digests freeze the normalized NV21-style temporary layout and compact
+// odd-height chroma behavior of P0, except the two I420 nearest digests. The
+// old I420 cursor incorrectly advanced UV by half a pair per pair: identity
+// Y=[0..5], U=[11,22,33], V=[44,55,66] repeated its first chroma pair. The fixed
+// nearest path is independently checked against NV12/NV21 and scalar indexing
+// in test_simd_dispatch_contract.cpp; direct and semi-planar digests stay frozen.
 constexpr std::array<YuvSampleBaseline, 12> kYuvSampleBaselines = {{
   {YUV_NV21, 6, 4, true, UINT64_C(0xbf6ca434702eb383)},
   {YUV_NV21, 6, 4, false, UINT64_C(0xa81e8dd3db65d589)},
@@ -116,9 +120,9 @@ constexpr std::array<YuvSampleBaseline, 12> kYuvSampleBaselines = {{
   {YUV_NV12, 5, 3, true, UINT64_C(0x21d313130a8786fe)},
   {YUV_NV12, 5, 3, false, UINT64_C(0xd8c1632c4dba11de)},
   {YUV_I420, 6, 4, true, UINT64_C(0xaed781e66afa49d5)},
-  {YUV_I420, 6, 4, false, UINT64_C(0x6e0bf9775d23007f)},
+  {YUV_I420, 6, 4, false, UINT64_C(0x6dd78dabed18818b)},
   {YUV_I420, 5, 3, true, UINT64_C(0xeee404a18079a5a4)},
-  {YUV_I420, 5, 3, false, UINT64_C(0x79993367c93a5d03)},
+  {YUV_I420, 5, 3, false, UINT64_C(0xd86c199aa04263c7)},
 }};
 
 struct PackedSampleBaseline {
@@ -130,8 +134,11 @@ struct PackedSampleBaseline {
     uint64_t scalar_hash;
 };
 
-// P0 samplers intentionally have ISA-specific rounding in C1/C4. Keeping all
-// three hashes makes those existing platform contracts explicit.
+// NEON retains P0 coordinate/rounding contracts. The x86 C4 paths now use
+// scalar incremental coordinates and round-to-nearest, matching C1/C3 and
+// their scalar fallback. The two corrected SSE digests equal the independently
+// generated scalar digests; test_simd_dispatch_contract.cpp checks every pixel
+// around block boundaries and exact half-value samples.
 constexpr std::array<PackedSampleBaseline, 6> kPackedSampleBaselines = {{
   {GRAY, 1, NEAREST, UINT64_C(0x9e6942c5b52c1983),
    UINT64_C(0xdd5514039adb4b83), UINT64_C(0xdd5514039adb4b83)},
@@ -142,9 +149,9 @@ constexpr std::array<PackedSampleBaseline, 6> kPackedSampleBaselines = {{
   {BGR, 3, BILINEAR, UINT64_C(0x667b8c97573bde83),
    UINT64_C(0x667b8c97573bde83), UINT64_C(0x667b8c97573bde83)},
   {RGBA, 4, NEAREST, UINT64_C(0x12bf63679a805b83),
-   UINT64_C(0x12bf63679a805b83), UINT64_C(0xb3e5e585979c4783)},
+   UINT64_C(0xb3e5e585979c4783), UINT64_C(0xb3e5e585979c4783)},
   {RGBA, 4, BILINEAR, UINT64_C(0x44fd060310364383),
-   UINT64_C(0x44fd060310364383), UINT64_C(0x8b4be7cb3cf5c783)},
+   UINT64_C(0x8b4be7cb3cf5c783), UINT64_C(0x8b4be7cb3cf5c783)},
 }};
 
 constexpr std::array<size_t, 13> kPixelCounts = {

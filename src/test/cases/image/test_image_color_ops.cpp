@@ -66,9 +66,10 @@ TEST_CASE("image_color_channel_pixel_ops_u8", "[image][color]") {
             SECTION("mean_channels") {
                 auto mean = base.MeanChannels();
                 inspirecv_test_write_image(mean, "color_mean_" + std::to_string(N) + ".png");
-                // Compute reference to match backend semantics:
-                // - On ARM NEON fast path (u8), library uses q ~= floor(sum/3) via (sum*21845)>>16
-                // - On x86 scalar fallback, library uses exact integer division q = sum / 3
+                // Integer channel mean is floor(sum / 3) on every backend.
+                // The old NEON multiplier 21845 underestimated positive
+                // multiples of three; the full sum range is independently
+                // checked by test_image_numeric_simd.cpp.
                 std::vector<uint8_t> ref(static_cast<size_t>(N) * N);
                 const uint8_t* p = base.Data();
                 for (int y = 0; y < N; ++y) {
@@ -77,11 +78,7 @@ TEST_CASE("image_color_channel_pixel_ops_u8", "[image][color]") {
                         unsigned int s = static_cast<unsigned int>(p[base_idx + 0]) +
                                          static_cast<unsigned int>(p[base_idx + 1]) +
                                          static_cast<unsigned int>(p[base_idx + 2]);
-#if (defined(__ARM_NEON) || defined(__ARM_NEON__)) && !defined(INSPIRECV_BACKEND_OPENCV)
-                        unsigned int q = (s * 21845u) >> 16; // NEON path approximation
-#else
-                        unsigned int q = s / 3u;             // x86 scalar fallback: exact divide-by-3
-#endif
+                        unsigned int q = s / 3u;
                         ref[static_cast<size_t>(y) * N + x] = static_cast<uint8_t>(q);
                     }
                 }
@@ -177,4 +174,3 @@ TEST_CASE("image_color_channel_pixel_ops_u8", "[image][color]") {
         }
     }
 }
-

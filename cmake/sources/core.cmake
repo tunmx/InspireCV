@@ -10,6 +10,7 @@ set(INSPIRECV_CORE_SOURCES
     ${INSPIRECV_SRC_DIR}/core/api/transform_matrix.cpp
     ${INSPIRECV_SRC_DIR}/core/api/image.cpp
     ${INSPIRECV_SRC_DIR}/core/runtime/acceleration_state.cpp
+    ${INSPIRECV_SRC_DIR}/core/runtime/cpu_features.cpp
     ${INSPIRECV_SRC_DIR}/core/runtime/image_acceleration.cpp
     ${INSPIRECV_SRC_DIR}/core/runtime/costman.cpp
     ${INSPIRECV_SRC_DIR}/core/runtime/logging.cpp

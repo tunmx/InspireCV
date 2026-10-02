@@ -275,7 +275,10 @@ YuvChannels DecodeYuv8(uint8x8_t luma, int16x8_t u, int16x8_t v) {
     const int16x8_t blue_bias = vmulq_n_s16(u, 130);
     return {ClampColor(vaddq_s16(y, red_bias)),
             ClampColor(vsubq_s16(y, green_bias)),
-            ClampColor(vaddq_s16(y, blue_bias))};
+            // The largest blue numerator is 255 * 64 + 127 * 130 =
+            // 32830, just beyond int16_t. Saturation before the final byte
+            // clamp preserves the scalar result; a wrapping add turns it blue=0.
+            ClampColor(vqaddq_s16(y, blue_bias))};
 }
 
 template <bool kBlueFirst, bool kAlpha>

@@ -49,7 +49,9 @@ enum class PixelFormat : uint8_t {
 };
 
 // Non-owning destination descriptor. Zero strides select tightly packed
-// defaults for the chosen tensor order.
+// defaults for the chosen tensor order. Float32 storage must be aligned for
+// float, and its byte strides must be multiples of sizeof(float); no SIMD
+// alignment is required.
 struct TensorBuffer {
     void* data = nullptr;
     size_t row_stride_bytes = 0;
@@ -63,6 +65,9 @@ struct TensorBuffer {
 
 // Non-owning input descriptor. A zero row_stride_bytes selects the natural
 // stride for the configured pixel format, including semi-planar YUV formats.
+// I420 stores Y, then U, then V. With padding, width, height and Y stride must
+// be even; U/V row strides are half the Y stride. Tightly packed I420 uses
+// ceil(width / 2) bytes per chroma row and ceil(height / 2) chroma rows.
 struct RawImageView {
     const uint8_t* data = nullptr;
     size_t row_stride_bytes = 0;

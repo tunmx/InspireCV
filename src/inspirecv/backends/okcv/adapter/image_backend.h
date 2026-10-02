@@ -9,6 +9,8 @@
 #include "inspirecv/core/runtime/acceleration_state.h"
 #include "inspirecv/core/runtime/image_acceleration.h"
 #include "logging.h"
+#include "inspirecv/core/runtime/cpu_features.h"
+#include "inspirecv/backends/okcv/kernels/x86/image_ops_avx2.h"
 
 #ifndef BACKUP_AFFINE
 #define BACKUP_AFFINE 0
@@ -24,7 +26,7 @@
 #  endif
 #endif
 
-#if defined(__AVX2__) || defined(__SSE2__)
+#if defined(__AVX2__) || defined(INSPIRECV_HAVE_SSE2)
 #  if defined(__has_include)
 #    if __has_include(<immintrin.h>)
 #      include <immintrin.h>
@@ -266,8 +268,8 @@ public:
         int top = kernel_size / 2;
         int bottom = kernel_size - top - 1;
         ImageT<Pixel> result;
-        okcv::Bitmap<Pixel> cur = bitmap_.Clone();
-        for (int it = 0; it < std::max(1, iterations); ++it) {
+        okcv::Bitmap<Pixel> cur = bitmap_.MinFilter(left, right, top, bottom);
+        for (int it = 1; it < std::max(1, iterations); ++it) {
             okcv::Bitmap<Pixel> tmp = cur.MinFilter(left, right, top, bottom);
             cur = std::move(tmp);
         }
@@ -282,8 +284,8 @@ public:
         int top = kernel_size / 2;
         int bottom = kernel_size - top - 1;
         ImageT<Pixel> result;
-        okcv::Bitmap<Pixel> cur = bitmap_.Clone();
-        for (int it = 0; it < std::max(1, iterations); ++it) {
+        okcv::Bitmap<Pixel> cur = bitmap_.MaxFilter(left, right, top, bottom);
+        for (int it = 1; it < std::max(1, iterations); ++it) {
             okcv::Bitmap<Pixel> tmp = cur.MaxFilter(left, right, top, bottom);
             cur = std::move(tmp);
         }
@@ -302,6 +304,17 @@ public:
         const Pixel t = static_cast<Pixel>(thresh);
         const Pixel mv = static_cast<Pixel>(maxval);
         // SIMD fast paths
+#if defined(INSPIRECV_HAVE_IMAGE_AVX2_KERNELS)
+        if (cpu::HasAvx2()) {
+            if (std::is_same<Pixel, uint8_t>::value)
+                okcv::x86::ThresholdU8Avx2(reinterpret_cast<const uint8_t*>(src),
+                  reinterpret_cast<uint8_t*>(dst), total, static_cast<uint8_t>(t), static_cast<uint8_t>(mv));
+            else
+                okcv::x86::ThresholdF32Avx2(reinterpret_cast<const float*>(src),
+                  reinterpret_cast<float*>(dst), total, static_cast<float>(t), static_cast<float>(mv));
+            return result;
+        }
+#endif
 #if defined(__AVX2__)
         if (std::is_same<Pixel, uint8_t>::value) {
             const int step = 32;
@@ -381,6 +394,17 @@ public:
         const Pixel* b = other.bitmap_.Data();
         Pixel* d = result.impl_->bitmap_.Data();
         const int n = bitmap_.DataSize();
+#if defined(INSPIRECV_HAVE_IMAGE_AVX2_KERNELS)
+        if (cpu::HasAvx2()) {
+            if (std::is_same<Pixel, uint8_t>::value)
+                okcv::x86::AbsDiffU8Avx2(reinterpret_cast<const uint8_t*>(a),
+                  reinterpret_cast<const uint8_t*>(b), reinterpret_cast<uint8_t*>(d), n);
+            else
+                okcv::x86::AbsDiffF32Avx2(reinterpret_cast<const float*>(a),
+                  reinterpret_cast<const float*>(b), reinterpret_cast<float*>(d), n);
+            return result;
+        }
+#endif
 #if defined(__AVX2__)
         if (std::is_same<Pixel, uint8_t>::value) {
             const int step = 32;
@@ -452,6 +476,18 @@ public:
         ImageT<Pixel> result;
         result.impl_->bitmap_.Reset(bitmap_.Width(), bitmap_.Height(), 1);
         // Common fast path: 3-channel interleaved images
+#if defined(INSPIRECV_HAVE_IMAGE_AVX2_KERNELS)
+        if (bitmap_.Channels() == 3 && cpu::HasAvx2()) {
+            const std::size_t pixels = static_cast<std::size_t>(bitmap_.Width()) * bitmap_.Height();
+            if (std::is_same<Pixel, uint8_t>::value)
+                okcv::x86::Mean3U8Avx2(reinterpret_cast<const uint8_t*>(bitmap_.Data()),
+                  reinterpret_cast<uint8_t*>(result.impl_->bitmap_.Data()), pixels);
+            else
+                okcv::x86::Mean3F32Avx2(reinterpret_cast<const float*>(bitmap_.Data()),
+                  reinterpret_cast<float*>(result.impl_->bitmap_.Data()), pixels);
+            return result;
+        }
+#endif
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
         if (bitmap_.Channels() == 3) {
             if (std::is_same<Pixel, uint8_t>::value) {
@@ -467,8 +503,8 @@ public:
                         s0 = vaddw_u8(s0, vget_low_u8(bgr.val[2]));
                         uint16x8_t s1 = vaddl_u8(vget_high_u8(bgr.val[0]), vget_high_u8(bgr.val[1]));
                         s1 = vaddw_u8(s1, vget_high_u8(bgr.val[2]));
-                        // Integer divide by 3: q = floor(n * 21845 / 65536)
-                        const uint16x4_t k = vdup_n_u16(21845);
+                        // ceil(65536/3) gives exact floor(n/3) for n in [0,765].
+                        const uint16x4_t k = vdup_n_u16(21846);
                         uint32x4_t m00 = vmull_u16(vget_low_u16(s0), k);
                         uint32x4_t m01 = vmull_u16(vget_high_u16(s0), k);
                         uint32x4_t m10 = vmull_u16(vget_low_u16(s1), k);
@@ -551,6 +587,18 @@ public:
         };
 
         // SIMD fast paths where feasible
+#if defined(INSPIRECV_HAVE_IMAGE_AVX2_KERNELS)
+        if (cpu::HasAvx2()) {
+            const std::size_t pixels = static_cast<std::size_t>(width) * height;
+            if (std::is_same<Pixel, uint8_t>::value)
+                okcv::x86::BlendU8Avx2(reinterpret_cast<const uint8_t*>(a),
+                  reinterpret_cast<const uint8_t*>(b), m, reinterpret_cast<uint8_t*>(d), pixels, cn);
+            else
+                okcv::x86::BlendF32Avx2(reinterpret_cast<const float*>(a),
+                  reinterpret_cast<const float*>(b), m, reinterpret_cast<float*>(d), pixels, cn);
+            return result;
+        }
+#endif
 #if defined(__AVX2__)
         if (std::is_same<Pixel, float>::value) {
             const int step = 8;

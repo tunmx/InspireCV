@@ -3,8 +3,13 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 #include "inspirecv/task/platform/cpu_features.h"
+
+#if defined(INSPIRECV_TASK_HAVE_AVX2_KERNELS)
+#include "inspirecv/task/kernels/x86/avx2_kernels.h"
+#endif
 
 #if defined(INSPIRECV_TASK_USE_NEON)
 #include <arm_neon.h>
@@ -167,22 +172,27 @@ void NearestQuadSse(const uint8_t* source, uint8_t* destination, Point* line,
     const size_t blocks = count / 4;
     const __m128 zero = _mm_set1_ps(0.0f);
     const __m128 half = _mm_set1_ps(0.5f);
-    const __m128 negative_half = _mm_set1_ps(-0.5f);
     const __m128 max_x = _mm_set1_ps(maximum_x);
     const __m128 max_y = _mm_set1_ps(maximum_y);
     const __m128i stride4 = _mm_set1_epi32(static_cast<int>(stride));
     const __m128i channels4 = _mm_set1_epi32(4);
     for (size_t block = 0; block < blocks; ++block) {
-        __m128 xs = _mm_set_ps(cursor.x + 3 * cursor.dx, cursor.x + 2 * cursor.dx,
-                               cursor.x + cursor.dx, cursor.x);
-        __m128 ys = _mm_set_ps(cursor.y + 3 * cursor.dy, cursor.y + 2 * cursor.dy,
-                               cursor.y + cursor.dy, cursor.y);
-        xs = _mm_min_ps(_mm_max_ps(xs, zero), max_x);
-        ys = _mm_min_ps(_mm_max_ps(ys, zero), max_y);
-        const __m128 x_bias = _mm_blendv_ps(half, negative_half, _mm_cmplt_ps(xs, zero));
-        const __m128 y_bias = _mm_blendv_ps(half, negative_half, _mm_cmplt_ps(ys, zero));
-        const __m128i xi = _mm_cvtps_epi32(_mm_round_ps(_mm_add_ps(xs, x_bias), 3));
-        const __m128i yi = _mm_cvtps_epi32(_mm_round_ps(_mm_add_ps(ys, y_bias), 3));
+        float x[4], y[4];
+        for (int pixel = 0; pixel < 4; ++pixel) {
+            x[pixel] = cursor.x;
+            y[pixel] = cursor.y;
+            cursor.Advance();
+        }
+        const __m128 xs = _mm_min_ps(_mm_max_ps(_mm_loadu_ps(x), zero), max_x);
+        const __m128 ys = _mm_min_ps(_mm_max_ps(_mm_loadu_ps(y), zero), max_y);
+        const __m128i x0 = _mm_cvttps_epi32(xs);
+        const __m128i y0 = _mm_cvttps_epi32(ys);
+        const __m128i xi = _mm_add_epi32(x0, _mm_and_si128(
+          _mm_castps_si128(_mm_cmpge_ps(_mm_sub_ps(xs, _mm_cvtepi32_ps(x0)), half)),
+          _mm_set1_epi32(1)));
+        const __m128i yi = _mm_add_epi32(y0, _mm_and_si128(
+          _mm_castps_si128(_mm_cmpge_ps(_mm_sub_ps(ys, _mm_cvtepi32_ps(y0)), half)),
+          _mm_set1_epi32(1)));
         const __m128i offsets =
           _mm_add_epi32(_mm_mullo_epi32(yi, stride4),
                         _mm_mullo_epi32(xi, channels4));
@@ -192,8 +202,6 @@ void NearestQuadSse(const uint8_t* source, uint8_t* destination, Point* line,
             std::memcpy(destination + 4 * (4 * block + pixel),
                         source + position[pixel], 4);
         }
-        cursor.x += 4 * cursor.dx;
-        cursor.y += 4 * cursor.dy;
     }
     const size_t completed = blocks * 4;
     Point tail[2] = {{cursor.x, cursor.y}, {cursor.dx, cursor.dy}};
@@ -206,7 +214,6 @@ void BilinearQuadSse(const uint8_t* source, uint8_t* destination, Point* line,
     CoordinateCursor cursor = MakeCursor(line);
     const float maximum_x = static_cast<float>(width - 1);
     const float maximum_y = static_cast<float>(height - 1);
-    const __m128i zero = _mm_setzero_si128();
     while (count-- != 0) {
         const float x = Limit(cursor.x, 0.0f, maximum_x);
         const float y = Limit(cursor.y, 0.0f, maximum_y);
@@ -216,27 +223,36 @@ void BilinearQuadSse(const uint8_t* source, uint8_t* destination, Point* line,
         const int y1 = static_cast<int>(ceilf(y));
         const float fx = x - static_cast<float>(x0);
         const float fy = y - static_cast<float>(y0);
-        const int offsets[4] = {
-          y0 * static_cast<int>(stride) + 4 * x0,
-          y0 * static_cast<int>(stride) + 4 * x1,
-          y1 * static_cast<int>(stride) + 4 * x0,
-          y1 * static_cast<int>(stride) + 4 * x1};
-        const __m128 weights[4] = {
-          _mm_set1_ps((1.0f - fx) * (1.0f - fy)),
-          _mm_set1_ps(fx * (1.0f - fy)),
-          _mm_set1_ps(fy * (1.0f - fx)),
-          _mm_set1_ps(fx * fy)};
-        __m128 value = _mm_setzero_ps();
+        const size_t offsets[4] = {
+          static_cast<size_t>(y0) * stride + 4 * x0,
+          static_cast<size_t>(y0) * stride + 4 * x1,
+          static_cast<size_t>(y1) * stride + 4 * x0,
+          static_cast<size_t>(y1) * stride + 4 * x1};
+        __m128 corners[4];
         for (int corner = 0; corner < 4; ++corner) {
             int32_t packed;
             std::memcpy(&packed, source + offsets[corner], sizeof(packed));
-            const __m128i bytes = _mm_cvtsi32_si128(packed);
-            const __m128i words = _mm_unpacklo_epi8(bytes, zero);
-            const __m128i integers = _mm_unpacklo_epi16(words, zero);
-            value = _mm_add_ps(value,
-                               _mm_mul_ps(weights[corner], _mm_cvtepi32_ps(integers)));
+            corners[corner] = _mm_cvtepi32_ps(_mm_cvtepu8_epi32(_mm_cvtsi32_si128(packed)));
         }
-        __m128i rounded = _mm_cvtps_epi32(_mm_round_ps(value, 3));
+        const __m128 top = _mm_add_ps(
+          _mm_mul_ps(_mm_set1_ps((1.0f - fx) * (1.0f - fy)), corners[0]),
+          _mm_mul_ps(_mm_set1_ps(fx * (1.0f - fy)), corners[1]));
+        const __m128 right = _mm_mul_ps(_mm_set1_ps(fx * fy), corners[3]);
+        const __m128d left_weight = _mm_set1_pd(fy * (1.0 - fx));
+        const __m128d low = _mm_add_pd(
+          _mm_add_pd(_mm_cvtps_pd(top), _mm_mul_pd(left_weight, _mm_cvtps_pd(corners[2]))),
+          _mm_cvtps_pd(right));
+        const __m128d high = _mm_add_pd(
+          _mm_add_pd(_mm_cvtps_pd(_mm_movehl_ps(top, top)),
+                       _mm_mul_pd(left_weight, _mm_cvtps_pd(_mm_movehl_ps(corners[2], corners[2])))),
+          _mm_cvtps_pd(_mm_movehl_ps(right, right)));
+        __m128 value = _mm_movelh_ps(_mm_cvtpd_ps(low), _mm_cvtpd_ps(high));
+        value = _mm_min_ps(_mm_max_ps(value, _mm_setzero_ps()), _mm_set1_ps(255.0f));
+        const __m128i integer = _mm_cvttps_epi32(value);
+        __m128i rounded = _mm_add_epi32(integer, _mm_and_si128(
+          _mm_castps_si128(_mm_cmpge_ps(_mm_sub_ps(value, _mm_cvtepi32_ps(integer)),
+                                        _mm_set1_ps(0.5f))),
+          _mm_set1_epi32(1)));
         rounded = _mm_packs_epi32(rounded, rounded);
         rounded = _mm_packus_epi16(rounded, rounded);
         const int32_t packed = _mm_cvtsi128_si32(rounded);
@@ -378,6 +394,16 @@ void DirectQuad(const uint8_t* source, uint8_t* destination, Point* line,
 void NearestMono(const uint8_t* source, uint8_t* destination, Point* line,
                  size_t first, size_t count, size_t /*capacity*/, size_t width,
                  size_t height, size_t stride) {
+#if defined(INSPIRECV_TASK_HAVE_AVX2_KERNELS)
+    // AVX2 gather uses signed 32-bit offsets and exact row-bounded loads.
+    // Tiny rows and very large buffers retain the size_t scalar route.
+    if (count >= 8 && width >= 4 && stride != 0 &&
+        height <= static_cast<size_t>(std::numeric_limits<int32_t>::max()) / stride &&
+        platform::HasAvx2()) {
+        x86::NearestMonoAvx2(source, destination, line, first, count, 0, width, height, stride);
+        return;
+    }
+#endif
 #if defined(INSPIRECV_TASK_USE_NEON)
     inspirecv_task_sample_c1_nearest_arm(source, destination + first,
                                          reinterpret_cast<float*>(line), count,
@@ -390,14 +416,36 @@ void NearestMono(const uint8_t* source, uint8_t* destination, Point* line,
 void NearestTriple(const uint8_t* source, uint8_t* destination, Point* line,
                    size_t first, size_t count, size_t /*capacity*/, size_t width,
                    size_t height, size_t stride) {
+#if defined(INSPIRECV_TASK_HAVE_AVX2_KERNELS)
+    // AVX2 gather uses signed 32-bit offsets and exact row-bounded loads.
+    // Tiny rows and very large buffers retain the size_t scalar route.
+    if (count >= 8 && width >= 4 && stride != 0 &&
+        height <= static_cast<size_t>(std::numeric_limits<int32_t>::max()) / stride &&
+        platform::HasAvx2()) {
+        x86::NearestTripleAvx2(source, destination, line, first, count, 0, width, height, stride);
+        return;
+    }
+#endif
     NearestScalar<3>(source, destination, line, first, count, width, height, stride);
 }
 
 void NearestQuad(const uint8_t* source, uint8_t* destination, Point* line,
                  size_t first, size_t count, size_t /*capacity*/, size_t width,
                  size_t height, size_t stride) {
+#if defined(INSPIRECV_TASK_HAVE_AVX2_KERNELS)
+    // AVX2 gather uses signed 32-bit offsets and exact row-bounded loads.
+    // Tiny rows and very large buffers retain the size_t scalar route.
+    if (count >= 8 && width >= 4 && stride != 0 &&
+        height <= static_cast<size_t>(std::numeric_limits<int32_t>::max()) / stride &&
+        platform::HasAvx2()) {
+        x86::NearestQuadAvx2(source, destination, line, first, count, 0, width, height, stride);
+        return;
+    }
+#endif
 #if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
-    if (platform::HasSse41()) {
+    if (stride != 0 &&
+        height <= static_cast<size_t>(std::numeric_limits<int32_t>::max()) / stride &&
+        platform::HasSse41()) {
         NearestQuadSse(source, destination, line, first, count, width, height, stride);
         return;
     }
@@ -414,6 +462,16 @@ void NearestQuad(const uint8_t* source, uint8_t* destination, Point* line,
 void BilinearMono(const uint8_t* source, uint8_t* destination, Point* line,
                   size_t first, size_t count, size_t /*capacity*/, size_t width,
                   size_t height, size_t stride) {
+#if defined(INSPIRECV_TASK_HAVE_AVX2_KERNELS)
+    // AVX2 gather uses signed 32-bit offsets and exact row-bounded loads.
+    // Tiny rows and very large buffers retain the size_t scalar route.
+    if (count >= 8 && width >= 4 && stride != 0 &&
+        height <= static_cast<size_t>(std::numeric_limits<int32_t>::max()) / stride &&
+        platform::HasAvx2()) {
+        x86::BilinearMonoAvx2(source, destination, line, first, count, 0, width, height, stride);
+        return;
+    }
+#endif
 #if defined(INSPIRECV_TASK_USE_NEON)
     inspirecv_task_sample_c1_bilinear_arm(source, destination + first,
                                           reinterpret_cast<float*>(line), count,
@@ -426,6 +484,16 @@ void BilinearMono(const uint8_t* source, uint8_t* destination, Point* line,
 void BilinearTriple(const uint8_t* source, uint8_t* destination, Point* line,
                     size_t first, size_t count, size_t /*capacity*/, size_t width,
                     size_t height, size_t stride) {
+#if defined(INSPIRECV_TASK_HAVE_AVX2_KERNELS)
+    // AVX2 gather uses signed 32-bit offsets and exact row-bounded loads.
+    // Tiny rows and very large buffers retain the size_t scalar route.
+    if (count >= 8 && width >= 4 && stride != 0 &&
+        height <= static_cast<size_t>(std::numeric_limits<int32_t>::max()) / stride &&
+        platform::HasAvx2()) {
+        x86::BilinearTripleAvx2(source, destination, line, first, count, 0, width, height, stride);
+        return;
+    }
+#endif
     destination += 3 * first;
 #if defined(INSPIRECV_TASK_USE_SSE)
     BilinearScalar<3>(source, destination, line, count, width, height, stride);
@@ -449,6 +517,16 @@ void BilinearTriple(const uint8_t* source, uint8_t* destination, Point* line,
 void BilinearQuad(const uint8_t* source, uint8_t* destination, Point* line,
                   size_t first, size_t count, size_t /*capacity*/, size_t width,
                   size_t height, size_t stride) {
+#if defined(INSPIRECV_TASK_HAVE_AVX2_KERNELS)
+    // AVX2 gather uses signed 32-bit offsets and exact row-bounded loads.
+    // Tiny rows and very large buffers retain the size_t scalar route.
+    if (count >= 8 && width >= 4 && stride != 0 &&
+        height <= static_cast<size_t>(std::numeric_limits<int32_t>::max()) / stride &&
+        platform::HasAvx2()) {
+        x86::BilinearQuadAvx2(source, destination, line, first, count, 0, width, height, stride);
+        return;
+    }
+#endif
 #if defined(INSPIRECV_TASK_HAVE_SSE41_INTRINSICS)
     if (platform::HasSse41()) {
         BilinearQuadSse(source, destination + 4 * first, line, count,
@@ -496,18 +574,19 @@ void NearestNv12(const uint8_t* source, uint8_t* destination, Point* line,
 
 void DirectI420(const uint8_t* source, uint8_t* destination, Point* line,
                 size_t first, size_t count, size_t capacity, size_t width,
-                size_t height, size_t /*stride*/) {
+                size_t height, size_t source_stride) {
     const int x = static_cast<int>(roundf(Limit(line[0].fX, 0.0f,
                                                 static_cast<float>(width - 1))));
     const int y = static_cast<int>(roundf(Limit(line[0].fY, 0.0f,
                                                 static_cast<float>(height - 1))));
-    const size_t chroma_width = (width + 1) / 2;
+    const size_t stride = source_stride == 0 ? width : source_stride;
+    const size_t chroma_stride = (stride + 1) / 2;
     const size_t chroma_height = (height + 1) / 2;
-    const size_t chroma_plane = chroma_width * chroma_height;
-    const uint8_t* u = source + width * height + (y / 2) * chroma_width + x / 2;
+    const size_t chroma_plane = chroma_stride * chroma_height;
+    const uint8_t* u = source + stride * height + (y / 2) * chroma_stride + x / 2;
     const uint8_t* v = u + chroma_plane;
     ChromaTarget target = TargetPlanes(destination, first, capacity);
-    std::memcpy(target.luma, source + static_cast<size_t>(y) * width + x, count);
+    std::memcpy(target.luma, source + static_cast<size_t>(y) * stride + x, count);
     const size_t pairs = (count + 1) / 2;
     for (size_t pair = 0; pair < pairs; ++pair) {
         target.vu[2 * pair] = v[pair];
@@ -518,25 +597,25 @@ void DirectI420(const uint8_t* source, uint8_t* destination, Point* line,
 void NearestI420(const uint8_t* source, uint8_t* destination, Point* line,
                  size_t first, size_t count, size_t capacity, size_t width,
                  size_t height, size_t source_stride) {
-    size_t stride = source_stride == 0 ? width : source_stride;
+    const size_t stride = source_stride == 0 ? width : source_stride;
+    const size_t chroma_stride = (stride + 1) / 2;
     const uint8_t* u = source + stride * height;
     ChromaTarget target = TargetPlanes(destination, first, capacity);
     NearestMono(source, target.luma, line, 0, count, capacity, width, height, stride);
 
-    if (source_stride == 0) stride = (width + 1) / 2;
     const size_t chroma_width = (width + 1) / 2;
     const size_t chroma_height = (height + 1) / 2;
-    const uint8_t* v = u + stride * chroma_height;
+    const uint8_t* v = u + chroma_stride * chroma_height;
     CoordinateCursor cursor = {(line[0].fX - 0.01f) / 2.0f,
                                (line[0].fY - 0.01f) / 2.0f,
-                               line[1].fX / 2.0f, line[1].fY / 2.0f};
+                               line[1].fX, line[1].fY};
     const float maximum_x = static_cast<float>(chroma_width - 1);
     const float maximum_y = static_cast<float>(chroma_height - 1);
     const size_t pairs = (count + 1) / 2;
     for (size_t pair = 0; pair < pairs; ++pair) {
         const int x = static_cast<int>(roundf(Limit(cursor.x, 0.0f, maximum_x)));
         const int y = static_cast<int>(roundf(Limit(cursor.y, 0.0f, maximum_y)));
-        const size_t offset = static_cast<size_t>(y) * stride + x;
+        const size_t offset = static_cast<size_t>(y) * chroma_stride + x;
         target.vu[2 * pair] = v[offset];
         target.vu[2 * pair + 1] = u[offset];
         cursor.Advance();

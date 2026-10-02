@@ -74,7 +74,8 @@ TaskStatus CompileConversion(const PipelineConfig& config,
 #if defined(INSPIRECV_TASK_DISABLE_TILING)
     candidate.tile_count = 1;
 #else
-    candidate.tile_count = (request.destination_width + 255) / 256;
+    candidate.tile_count = request.destination_width / 256 +
+                           (request.destination_width % 256 != 0);
 #endif
     if (drawing) candidate.tile_count = 1;
 

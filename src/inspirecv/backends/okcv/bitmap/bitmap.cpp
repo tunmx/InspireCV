@@ -11,19 +11,22 @@
 #include <type_traits>
 #include <thread>
 #include <deque>
+#include "inspirecv/core/runtime/cpu_features.h"
+#include "inspirecv/backends/okcv/kernels/x86/image_ops_avx2.h"
+#include "inspirecv/backends/okcv/kernels/x86/image_affine_avx2.h"
 
 #if defined(__has_include)
 #  if (defined(__ARM_NEON) || defined(__ARM_NEON__)) && __has_include(<arm_neon.h>)
 #    include <arm_neon.h>
 #  endif
-#  if (defined(__AVX2__) || defined(__SSE2__)) && __has_include(<immintrin.h>)
+#  if (defined(__AVX2__) || defined(INSPIRECV_HAVE_SSE2)) && __has_include(<immintrin.h>)
 #    include <immintrin.h>
 #  endif
 #else
 #  if defined(__ARM_NEON) || defined(__ARM_NEON__)
 #    include <arm_neon.h>
 #  endif
-#  if defined(__AVX2__) || defined(__SSE2__)
+#  if defined(__AVX2__) || defined(INSPIRECV_HAVE_SSE2)
 #    include <immintrin.h>
 #  endif
 #endif
@@ -38,7 +41,124 @@
 
 namespace okcv {
 
-#if defined(__SSSE3__)
+namespace {
+
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+// Keep fixed-size mapped copies separate from the other nearest row loops.
+// One call processes the whole destination and retains repeated-row copying.
+template <typename D, int PixelChannels>
+#if defined(_MSC_VER)
+__declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#endif
+void CopyNearestMappedPixels(const Bitmap<D>& source, Bitmap<D>& destination,
+                             const int* x_map, const int* y_map,
+                             int width, int height) {
+    static_assert(PixelChannels == 3 || PixelChannels == 4, "fixed pixel size");
+    const size_t row_bytes = static_cast<size_t>(width) * PixelChannels * sizeof(D);
+    for (int y = 0; y < height; ++y) {
+        const int sy = y_map[y];
+        D* dst_row = destination.Row(y);
+        if (y > 0 && sy == y_map[y - 1]) {
+            std::memcpy(dst_row, destination.Row(y - 1), row_bytes);
+            continue;
+        }
+        const D* src_row = source.Row(sy);
+        for (int x = 0; x < width; ++x) {
+            const int sx = x_map[x];
+            std::memcpy(dst_row + static_cast<size_t>(x) * PixelChannels,
+                        src_row + static_cast<size_t>(sx) * PixelChannels,
+                        PixelChannels * sizeof(D));
+        }
+    }
+}
+#endif
+
+std::pair<int, int> CheckedPaddedSize(int width, int height, int channels,
+                                     int top, int down, int left, int right) {
+    INSPIRECV_CHECK(top >= 0 && down >= 0 && left >= 0 && right >= 0);
+    const size_t padded_width = static_cast<size_t>(width) + left + right;
+    const size_t padded_height = static_cast<size_t>(height) + top + down;
+    const size_t limit = static_cast<size_t>(std::numeric_limits<int>::max());
+    INSPIRECV_CHECK(padded_width <= limit && padded_height <= limit)
+      << "Padded dimensions exceed the supported range";
+    // Check by division before multiplying, including unusual channel counts.
+    if (channels > 0 && padded_height > 0) {
+        INSPIRECV_CHECK(padded_width <= limit / static_cast<size_t>(channels) / padded_height)
+          << "Padded dimensions exceed the supported element count";
+    }
+    return {static_cast<int>(padded_width), static_cast<int>(padded_height)};
+}
+
+#if defined(INSPIRECV_HAVE_SSE2)
+inline __m128i RoundNonnegativeSse2(__m128 value) {
+    const __m128i integer = _mm_cvttps_epi32(value);
+    const __m128 fraction = _mm_sub_ps(value, _mm_cvtepi32_ps(integer));
+    // Unlike adding .5f before truncation, this keeps nextafter(.5f,0) below
+    // the tie. Interpolation of u8 data is bounded and nonnegative.
+    const __m128i increment = _mm_and_si128(
+      _mm_castps_si128(_mm_cmpge_ps(fraction, _mm_set1_ps(.5f))), _mm_set1_epi32(1));
+    return _mm_add_epi32(integer, increment);
+}
+
+inline __m128i AverageFourU8Sse2(__m128i a, __m128i b, __m128i c, __m128i d) {
+    const __m128i zero = _mm_setzero_si128(), two = _mm_set1_epi16(2);
+    const __m128i low = _mm_add_epi16(_mm_add_epi16(_mm_unpacklo_epi8(a, zero), _mm_unpacklo_epi8(b, zero)),
+                                      _mm_add_epi16(_mm_unpacklo_epi8(c, zero), _mm_unpacklo_epi8(d, zero)));
+    const __m128i high = _mm_add_epi16(_mm_add_epi16(_mm_unpackhi_epi8(a, zero), _mm_unpackhi_epi8(b, zero)),
+                                       _mm_add_epi16(_mm_unpackhi_epi8(c, zero), _mm_unpackhi_epi8(d, zero)));
+    return _mm_packus_epi16(_mm_srli_epi16(_mm_add_epi16(low, two), 2),
+                             _mm_srli_epi16(_mm_add_epi16(high, two), 2));
+}
+
+void ResizeBilinear2xU8Sse2(const uint8_t* source, uint8_t* destination,
+                           int width, int height, int channels) {
+    const size_t stride = static_cast<size_t>(width) * channels;
+    for (int y = 0; y < height; ++y) {
+        const uint8_t* top = source + static_cast<size_t>(y) * stride;
+        const uint8_t* bottom = source + static_cast<size_t>(std::min(y + 1, height - 1)) * stride;
+        uint8_t* even = destination + static_cast<size_t>(y) * stride * 4;
+        uint8_t* odd = even + stride * 2;
+        int x = 0;
+        if (channels == 1 || channels == 4) {
+            const int pixels = 16 / channels;
+            for (; x + pixels < width; x += pixels) {
+                const __m128i tl = _mm_loadu_si128(reinterpret_cast<const __m128i*>(top + x * channels));
+                const __m128i tr = _mm_loadu_si128(reinterpret_cast<const __m128i*>(top + (x + 1) * channels));
+                const __m128i bl = _mm_loadu_si128(reinterpret_cast<const __m128i*>(bottom + x * channels));
+                const __m128i br = _mm_loadu_si128(reinterpret_cast<const __m128i*>(bottom + (x + 1) * channels));
+                const __m128i horizontal = _mm_avg_epu8(tl, tr), vertical = _mm_avg_epu8(tl, bl);
+                const __m128i diagonal = AverageFourU8Sse2(tl, tr, bl, br);
+                const __m128i even_low = channels == 1 ? _mm_unpacklo_epi8(tl, horizontal) : _mm_unpacklo_epi32(tl, horizontal);
+                const __m128i even_high = channels == 1 ? _mm_unpackhi_epi8(tl, horizontal) : _mm_unpackhi_epi32(tl, horizontal);
+                const __m128i odd_low = channels == 1 ? _mm_unpacklo_epi8(vertical, diagonal) : _mm_unpacklo_epi32(vertical, diagonal);
+                const __m128i odd_high = channels == 1 ? _mm_unpackhi_epi8(vertical, diagonal) : _mm_unpackhi_epi32(vertical, diagonal);
+                const size_t offset = static_cast<size_t>(x) * channels * 2;
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(even + offset), even_low);
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(even + offset + 16), even_high);
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(odd + offset), odd_low);
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(odd + offset + 16), odd_high);
+            }
+        }
+        for (; x < width; ++x) {
+            const int right = std::min(x + 1, width - 1);
+            for (int c = 0; c < channels; ++c) {
+                const unsigned tl = top[x * channels + c], tr = top[right * channels + c];
+                const unsigned bl = bottom[x * channels + c], br = bottom[right * channels + c];
+                even[x * channels * 2 + c] = static_cast<uint8_t>(tl);
+                even[(x * 2 + 1) * channels + c] = static_cast<uint8_t>((tl + tr + 1) / 2);
+                odd[x * channels * 2 + c] = static_cast<uint8_t>((tl + bl + 1) / 2);
+                odd[(x * 2 + 1) * channels + c] = static_cast<uint8_t>((tl + tr + bl + br + 2) / 4);
+            }
+        }
+    }
+}
+#endif
+
+}  // namespace
+
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
 namespace {
 
 const bool kX86U8C3KernelsEnabled = []() {
@@ -206,13 +326,20 @@ void Bitmap<D>::Read(const char *filename, int channels) {
     } else {
         // convert bytes -> float (0..255 range)
         const size_t count = static_cast<size_t>(data.width) * data.height * data.channels;
-        std::vector<D> buffer(count);
+        this->Reset(data.width, data.height, data.channels);
+        D* buffer = this->Data();
         const unsigned char* src = data.data.data();
 
         if (std::is_same<D, float>::value) {
             // SIMD-accelerated u8 -> f32 conversion
-            float* dst = reinterpret_cast<float*>(buffer.data());
+            float* dst = reinterpret_cast<float*>(buffer);
             size_t i = 0;
+#if defined(INSPIRECV_HAVE_IMAGE_AVX2_KERNELS)
+            if (inspirecv::cpu::HasAvx2()) {
+                x86::ConvertU8ToF32Avx2(src, dst, count);
+                return;
+            }
+#endif
 #if defined(__AVX2__)
             for (; i + 32 <= count; i += 32) {
                 __m128i m0 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i));
@@ -270,7 +397,6 @@ void Bitmap<D>::Read(const char *filename, int channels) {
         } else {
             for (size_t i = 0; i < count; ++i) buffer[i] = static_cast<D>(src[i]);
         }
-        this->Reset(data.width, data.height, data.channels, buffer.data(), true);
     }
 #endif  // INSPIRECV_BACKEND_OKCV_USE_OPENCV_IO
 }
@@ -352,6 +478,27 @@ template <typename D>
 Bitmap<D> Bitmap<D>::Mul(float a) const {
     Bitmap<D> res;
     res.Reset(width_, height_, channels_);
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+    // Cache contiguous storage so the fallback can be vectorized without changing arithmetic.
+    if (std::is_same<D, float>::value) {
+        const D* source = Data();
+        D* destination = res.Data();
+        const int count = DataSize();
+#if defined(INSPIRECV_HAVE_IMAGE_AVX2_KERNELS)
+        if (count >= 8 && inspirecv::cpu::HasAvx2()) {
+            x86::MulF32Avx2(reinterpret_cast<const float*>(source),
+                          reinterpret_cast<float*>(destination),
+                          static_cast<size_t>(count), a);
+            return res;
+        }
+#endif
+        for (int i = 0; i < count; ++i) {
+            const float value = source[i] * a;
+            destination[i] = static_cast<D>(value);
+        }
+        return res;
+    }
+#endif
     auto res_iter = res.Data();
     for (int i = 0; i < DataSize(); ++i) {
         *res_iter++ = Data()[i] * a;
@@ -363,6 +510,29 @@ template <typename D>
 Bitmap<D> Bitmap<D>::MulAdd(float a, float b) const {
     Bitmap<D> res;
     res.Reset(width_, height_, channels_);
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+    // Cache contiguous storage so the fallback can be vectorized without changing arithmetic.
+    if (std::is_same<D, float>::value) {
+        const D* source = Data();
+        D* destination = res.Data();
+        const int count = DataSize();
+#if defined(INSPIRECV_HAVE_IMAGE_AVX2_KERNELS) && defined(_MSC_VER) && !defined(__clang__)
+        // Other x86 compilers vectorize the loop below, preserving their
+        // existing contraction contract in explicitly enabled FMA builds.
+        if (count >= 8 && inspirecv::cpu::HasAvx2()) {
+            x86::MulAddF32Avx2(reinterpret_cast<const float*>(source),
+                          reinterpret_cast<float*>(destination),
+                          static_cast<size_t>(count), a, b);
+            return res;
+        }
+#endif
+        for (int i = 0; i < count; ++i) {
+            const float value = source[i] * a + b;
+            destination[i] = static_cast<D>(value);
+        }
+        return res;
+    }
+#endif
     auto res_iter = res.Data();
     for (int i = 0; i < DataSize(); ++i) {
         const float value = Data()[i] * a + b;
@@ -491,8 +661,31 @@ Bitmap<D> Bitmap<D>::ResizeBilinear(int width, int height) const {
         return Clone();
     }
 
+#if defined(INSPIRECV_HAVE_SSE2)
+    // Origin-aligned u8 interpolation at integral coordinates is a plain
+    // sample. Restrict this to u8: f32 subtraction can overflow even at weight0.
+    if (std::is_same<D, uint8_t>::value && width_ > 0 && height_ > 0 &&
+        width_ % width == 0 && height_ % height == 0) {
+        return ResizeNearest(width, height);
+    }
+#endif
     Bitmap<D> dst;
     dst.Reset(width, height, channels_);
+#if defined(INSPIRECV_HAVE_SSE2)
+    if (std::is_same<D, uint8_t>::value && width % 2 == 0 && height % 2 == 0 &&
+        width / 2 == width_ && height / 2 == height_) {
+        // For a2x resize the weights are0,.5: exact integer sums avoid floating
+        // rounding and all coordinate tables. Round the four-neighbor sum once.
+        const uint8_t* source = reinterpret_cast<const uint8_t*>(Data());
+        uint8_t* output = reinterpret_cast<uint8_t*>(dst.Data());
+        if (channels_ == 3 && kX86U8C3KernelsEnabled && inspirecv::cpu::HasSsse3()) {
+            x86::ResizeBilinear2xU8C3(source, output, width_, height_);
+        } else {
+            ResizeBilinear2xU8Sse2(source, output, width_, height_, channels_);
+        }
+        return dst;
+    }
+#endif
     const float height_scale = static_cast<float>(height_) / height;
     const float width_scale = static_cast<float>(width_) / width;
     std::vector<int> in_x_low(width);
@@ -504,6 +697,21 @@ Bitmap<D> Bitmap<D>::ResizeBilinear(int width, int height) const {
         in_x_up[x] = std::min(in_x_low[x] + 1, width_ - 1);
         lerp_x[x] = in_x - in_x_low[x];
     }
+
+#if defined(INSPIRECV_HAVE_IMAGE_AVX2_KERNELS)
+    if (std::is_same<D, uint8_t>::value && (channels_ == 1 || channels_ == 3 || channels_ == 4) &&
+        inspirecv::cpu::HasAvx2()) {
+        for (int y = 0; y < height; ++y) {
+            const float position = y * height_scale;
+            const int low = std::min(static_cast<int>(position), height_ - 1);
+            const int high = std::min(low + 1, height_ - 1);
+            x86::ResizeBilinearU8RowAvx2(reinterpret_cast<const uint8_t*>(Row(low)),
+              reinterpret_cast<const uint8_t*>(Row(high)), reinterpret_cast<uint8_t*>(dst.Row(y)),
+              width_, width, channels_, in_x_low.data(), in_x_up.data(), lerp_x.data(), position - low);
+        }
+        return dst;
+    }
+#endif
 
     auto dst_iter = dst.Data();
 #if defined(__AVX2__)
@@ -611,7 +819,7 @@ Bitmap<D> Bitmap<D>::ResizeBilinear(int width, int height) const {
         return dst;
     }
 #endif
-#if defined(__SSE2__)
+#if defined(INSPIRECV_HAVE_SSE2)
     // SSE2 fast path: uint8 single-channel, 4 pixels per step (compute in float, round to nearest)
     if (channels_ == 1 && std::is_same<D, uint8_t>::value) {
         for (int y = 0; y < height; ++y) {
@@ -652,7 +860,7 @@ Bitmap<D> Bitmap<D>::ResizeBilinear(int width, int height) const {
                 __m128 vtop = _mm_add_ps(vtl, _mm_mul_ps(_mm_sub_ps(vtr, vtl), vx));
                 __m128 vbot = _mm_add_ps(vbl, _mm_mul_ps(_mm_sub_ps(vbr, vbl), vx));
                 __m128 vout = _mm_add_ps(vtop, _mm_mul_ps(_mm_sub_ps(vbot, vtop), vy));
-                __m128i vi  = _mm_cvtps_epi32(vout); // round to nearest
+                __m128i vi  = RoundNonnegativeSse2(vout); // round to nearest
                 __m128i vi16 = _mm_packs_epi32(vi, _mm_setzero_si128());
                 __m128i vi8  = _mm_packus_epi16(vi16, _mm_setzero_si128());
                 alignas(16) uint8_t tmp[16];
@@ -719,7 +927,7 @@ Bitmap<D> Bitmap<D>::ResizeBilinear(int width, int height) const {
                     __m128 vtop = _mm_add_ps(vtl, _mm_mul_ps(_mm_sub_ps(vtr, vtl), vx));
                     __m128 vbot = _mm_add_ps(vbl, _mm_mul_ps(_mm_sub_ps(vbr, vbl), vx));
                     __m128 vout = _mm_add_ps(vtop, _mm_mul_ps(_mm_sub_ps(vbot, vtop), vy));
-                    __m128i vi  = _mm_cvtps_epi32(vout);
+                    __m128i vi  = RoundNonnegativeSse2(vout);
                     __m128i vi16 = _mm_packs_epi32(vi, _mm_setzero_si128());
                     __m128i vi8  = _mm_packus_epi16(vi16, _mm_setzero_si128());
                     alignas(16) uint8_t tmp[16];
@@ -1117,7 +1325,7 @@ Bitmap<D> Bitmap<D>::ResizeNearest(int width, int height) const {
                 const uint8_t* src_row = reinterpret_cast<const uint8_t*>(Row(in_y));
                 uint8_t* dst_row = reinterpret_cast<uint8_t*>(dst.Row(y));
                 int x = 0;
-#if defined(__AVX2__) || defined(__SSE2__)
+#if defined(__AVX2__) || defined(INSPIRECV_HAVE_SSE2)
                 for (; x + 32 <= width; x += 32) {
                     int sx = (x >> 1);
                     __m128i s = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src_row + sx));
@@ -1180,7 +1388,7 @@ Bitmap<D> Bitmap<D>::ResizeNearest(int width, int height) const {
                 const float* src_row = reinterpret_cast<const float*>(Row(in_y));
                 float* dst_row = reinterpret_cast<float*>(dst.Row(y));
                 int x = 0;
-#if defined(__SSE2__)
+#if defined(INSPIRECV_HAVE_SSE2)
                 for (; x + 8 <= width; x += 8) {
                     int sx = (x >> 1);
                     __m128 s = _mm_loadu_ps(src_row + sx);          // a0 a1 a2 a3
@@ -1214,6 +1422,59 @@ Bitmap<D> Bitmap<D>::ResizeNearest(int width, int height) const {
         in_y_idx[y] = std::min(static_cast<int>(y * height_scale), height_ - 1);
     }
     const size_t row_bytes = static_cast<size_t>(width) * static_cast<size_t>(channels_) * sizeof(D);
+#if defined(INSPIRECV_HAVE_SSE2)
+    // Horizontal downsampling needs indexed copies, not repeated-pixel runs.
+    // Keep it outside the broadcast loop so enabling MSVC's SSE2 path does not
+    // add a run-length scan and vector-width check to every output pixel.
+    if (std::is_same<D, uint8_t>::value && channels_ == 1 && width <= width_) {
+        for (int y = 0; y < height; ++y) {
+            const int sy = in_y_idx[y];
+            D* dst_row = dst.Row(y);
+            if (y > 0 && sy == in_y_idx[y - 1]) {
+                std::memcpy(dst_row, dst.Row(y - 1), row_bytes);
+                continue;
+            }
+            const D* src_row = Row(sy);
+            for (int x = 0; x < width; ++x) {
+                dst_row[x] = src_row[in_x_idx[x]];
+            }
+        }
+        return dst;
+    }
+#endif
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+    // A non-expanding horizontal map needs no repeated-pixel run scan.
+    // Reuse the coordinate maps, allocation and row replication above.
+    if (std::is_same<D, uint8_t>::value && channels_ == 3 && width <= width_) {
+        for (int y = 0; y < height; ++y) {
+            const int sy = in_y_idx[y];
+            D* dst_row = dst.Row(y);
+            if (y > 0 && sy == in_y_idx[y - 1]) {
+                std::memcpy(dst_row, dst.Row(y - 1), row_bytes);
+                continue;
+            }
+            const D* src_row = Row(sy);
+            for (int x = 0; x < width; ++x) {
+                const D* pixel = src_row + static_cast<size_t>(in_x_idx[x]) * 3;
+                D* output = dst_row + static_cast<size_t>(x) * 3;
+                output[0] = pixel[0];
+                output[1] = pixel[1];
+                output[2] = pixel[2];
+            }
+        }
+        return dst;
+    }
+#endif
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+    if (channels_ == 4) {
+        CopyNearestMappedPixels<D, 4>(*this, dst, in_x_idx.data(), in_y_idx.data(), width, height);
+        return dst;
+    }
+    if (channels_ == 3 && std::is_same<D, float>::value) {
+        CopyNearestMappedPixels<D, 3>(*this, dst, in_x_idx.data(), in_y_idx.data(), width, height);
+        return dst;
+    }
+#endif
     for (int y = 0; y < height; ++y) {
         int sy = in_y_idx[y];
         D* dst_row = dst.Row(y);
@@ -1229,7 +1490,7 @@ Bitmap<D> Bitmap<D>::ResizeNearest(int width, int height) const {
                 const int sx = in_x_idx[x];
                 int run = 1;
                 while (x + run < width && in_x_idx[x + run] == sx) ++run;
-#if defined(__SSE2__)
+#if defined(INSPIRECV_HAVE_SSE2)
                 while (run >= 16) {
                     __m128i vv = _mm_set1_epi8(static_cast<char>(src_row[sx]));
                     _mm_storeu_si128(reinterpret_cast<__m128i*>(dst_row + x), vv);
@@ -1255,7 +1516,7 @@ Bitmap<D> Bitmap<D>::ResizeNearest(int width, int height) const {
                 const int sx = in_x_idx[x];
                 int run = 1;
                 while (x + run < width && in_x_idx[x + run] == sx) ++run;
-#if defined(__SSE2__)
+#if defined(INSPIRECV_HAVE_SSE2)
                 while (run >= 4) {
                     __m128 vv = _mm_set1_ps(reinterpret_cast<const float*>(src_row)[sx]);
                     _mm_storeu_ps(reinterpret_cast<float*>(dst_row + x), vv);
@@ -1358,7 +1619,7 @@ void Bitmap<D>::CropAndResizeNearest(Bitmap<D> &dst, const Rect<int> &rect, int 
                 const int sx = in_x_idx[x];
                 int run = 1;
                 while (x + run < resize_width && in_x_idx[x + run] == sx) ++run;
-#if defined(__SSE2__)
+#if defined(INSPIRECV_HAVE_SSE2)
                 while (run >= 16) {
                     __m128i vv = _mm_set1_epi8(static_cast<char>(src_row[sx]));
                     _mm_storeu_si128(reinterpret_cast<__m128i*>(dst_row + x), vv);
@@ -1384,7 +1645,7 @@ void Bitmap<D>::CropAndResizeNearest(Bitmap<D> &dst, const Rect<int> &rect, int 
                 const int sx = in_x_idx[x];
                 int run = 1;
                 while (x + run < resize_width && in_x_idx[x + run] == sx) ++run;
-#if defined(__SSE2__)
+#if defined(INSPIRECV_HAVE_SSE2)
                 while (run >= 4) {
                     __m128 vv = _mm_set1_ps(reinterpret_cast<const float*>(src_row)[sx]);
                     _mm_storeu_ps(reinterpret_cast<float*>(dst_row + x), vv);
@@ -1470,7 +1731,7 @@ void Bitmap<D>::CropAndResizeBilinear(Bitmap<D> &dst, const Rect<int> &rect, int
     }
 
     // SIMD fast paths for u8 using 4-pixel steps (compute in float, round to nearest)
-#if defined(__SSE2__)
+#if defined(INSPIRECV_HAVE_SSE2)
     if (channels_ == 1 && std::is_same<D, uint8_t>::value) {
         for (int y = 0; y < resize_height; ++y) {
             float in_y = y * height_scale + rect.ymin();
@@ -1507,7 +1768,7 @@ void Bitmap<D>::CropAndResizeBilinear(Bitmap<D> &dst, const Rect<int> &rect, int
                 __m128 vtop = _mm_add_ps(vtl, _mm_mul_ps(_mm_sub_ps(vtr, vtl), vx));
                 __m128 vbot = _mm_add_ps(vbl, _mm_mul_ps(_mm_sub_ps(vbr, vbl), vx));
                 __m128 vout = _mm_add_ps(vtop, _mm_mul_ps(_mm_sub_ps(vbot, vtop), vy));
-                __m128i vi  = _mm_cvtps_epi32(vout);
+                __m128i vi  = RoundNonnegativeSse2(vout);
                 __m128i vi16 = _mm_packs_epi32(vi, _mm_setzero_si128());
                 __m128i vi8  = _mm_packus_epi16(vi16, _mm_setzero_si128());
                 alignas(16) uint8_t tmp[16];
@@ -1570,7 +1831,7 @@ void Bitmap<D>::CropAndResizeBilinear(Bitmap<D> &dst, const Rect<int> &rect, int
                     __m128 vtop = _mm_add_ps(vtl, _mm_mul_ps(_mm_sub_ps(vtr, vtl), vx));
                     __m128 vbot = _mm_add_ps(vbl, _mm_mul_ps(_mm_sub_ps(vbr, vbl), vx));
                     __m128 vout = _mm_add_ps(vtop, _mm_mul_ps(_mm_sub_ps(vbot, vtop), vy));
-                    __m128i vi  = _mm_cvtps_epi32(vout);
+                    __m128i vi  = RoundNonnegativeSse2(vout);
                     __m128i vi16 = _mm_packs_epi32(vi, _mm_setzero_si128());
                     __m128i vi8  = _mm_packus_epi16(vi16, _mm_setzero_si128());
                     alignas(16) uint8_t tmp[16];
@@ -2246,7 +2507,7 @@ template <typename Pixel, int Channels>
 void AffineReplicateRow(const Pixel* low, const Pixel* up, Pixel* output, int width, float fy,
                         const AffineAxisTable& table, int begin = 0) {
     int x = begin;
-#if defined(__SSE2__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#if defined(INSPIRECV_HAVE_SSE2) || defined(__ARM_NEON) || defined(__ARM_NEON__)
     for (; x + 4 <= width; x += 4) {
         const auto& p0 = table[x];
         const auto& p1 = table[x + 1];
@@ -2255,7 +2516,7 @@ void AffineReplicateRow(const Pixel* low, const Pixel* up, Pixel* output, int wi
         // Replicate/interior indices are already valid; no per-tap border
         // flags or padding branches are needed in this row.
         for (int channel = 0; channel < Channels; ++channel) {
-#if defined(__SSE2__)
+#if defined(INSPIRECV_HAVE_SSE2)
             const __m128 tl =
                 _mm_setr_ps(low[p0.xl * Channels + channel], low[p1.xl * Channels + channel],
                             low[p2.xl * Channels + channel], low[p3.xl * Channels + channel]);
@@ -2561,7 +2822,7 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                 const float* row_up  = in_yu ? reinterpret_cast<const float*>(Row(yu)) : nullptr;
                 float* out_row = reinterpret_cast<float*>(dst.Row(y));
                 int x = 0;
-#if defined(__SSE2__)
+#if defined(INSPIRECV_HAVE_SSE2)
                 for (; x + 4 <= width; x += 4) {
                     __m128 vx = _mm_loadu_ps(xinfo.Weights(x));
                     __m128 vy = _mm_set1_ps(fy);
@@ -2668,7 +2929,7 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                 const uint8_t* row_up  = in_yu ? reinterpret_cast<const uint8_t*>(Row(yu)) : nullptr;
                 uint8_t* out_row = reinterpret_cast<uint8_t*>(dst.Row(y));
                 int x = 0;
-#if defined(__SSE2__)
+#if defined(INSPIRECV_HAVE_SSE2)
                 for (; x + 4 <= width; x += 4) {
                     __m128 vx = _mm_loadu_ps(xinfo.Weights(x));
                     __m128 vy = _mm_set1_ps(fy);
@@ -2858,7 +3119,7 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                         out_row[(x + 3) * 3 + cc] = outv[3];
                     }
                 }
-#elif defined(__SSE2__)
+#elif defined(INSPIRECV_HAVE_SSE2)
                 for (; x + 4 <= width; x += 4) {
                     __m128 vx = _mm_loadu_ps(xinfo.Weights(x));
                     __m128 vy = _mm_set1_ps(fy);
@@ -2978,7 +3239,7 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                         }
                     }
                 }
-#elif defined(__SSE2__)
+#elif defined(INSPIRECV_HAVE_SSE2)
                 for (; x + 4 <= width; x += 4) {
                     __m128 vx = _mm_loadu_ps(xinfo.Weights(x));
                     __m128 vy = _mm_set1_ps(fy);
@@ -3055,6 +3316,24 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
         return dst;
     }
 
+    // General u8 C3 uses Reference's coordinate order and whole-pixel constant
+    // border. Preserve that contract separately from the axis and C1/C4 paths.
+    // Whole-project FMA builds retain their existing fused Reference evaluator.
+#if defined(INSPIRECV_HAVE_IMAGE_AVX2_KERNELS) && !defined(__FMA__)
+    if (std::is_same<D, uint8_t>::value && channels_ == 3 && inspirecv::cpu::HasAvx2() &&
+        (border_mode == BORDER_MODE_CONSTANT || border_mode == BORDER_MODE_REPLICATE)) {
+        Bitmap<D> dst;
+        dst.Reset(width, height, channels_);
+        if (x86::AffineBilinearReferenceU8Avx2(
+              reinterpret_cast<const uint8_t*>(Data()), width_, height_,
+              reinterpret_cast<uint8_t*>(dst.Data()), width, height, channels_, matrix.Data(),
+              border_mode == BORDER_MODE_REPLICATE, static_cast<uint8_t>(border_value))) {
+            return dst;
+        }
+        return AffineBilinearReference(width, height, matrix, border_mode, border_value);
+    }
+#endif
+
     // General affine (with shear/rotation) SIMD micro-kernel
 #if OKCV_ENABLE_AFFINE_GENERAL_SIMD
     {
@@ -3078,7 +3357,7 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
             if (channels_ == 1 && std::is_same<D, float>::value) {
                 float* out_row = reinterpret_cast<float*>(out_row_any);
                 int x = 0;
-#if defined(__SSE2__)
+#if defined(INSPIRECV_HAVE_SSE2)
                 for (; x + 4 <= width; x += 4) {
                     float sx0 = yb + (x + 0) * a;
                     float sy0 = yd + (x + 0) * c;
@@ -3096,22 +3375,22 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                     float fx1 = sx1 - xl1, fy1 = sy1 - yl1;
                     float fx2 = sx2 - xl2, fy2 = sy2 - yl2;
                     float fx3 = sx3 - xl3, fy3 = sy3 - yl3;
+                    // Form both taps before clamping: a negative lower tap
+                    // must not move the upper tap one pixel into the image.
+                    int xu0 = xl0 + 1, yu0 = yl0 + 1;
+                    int xu1 = xl1 + 1, yu1 = yl1 + 1;
+                    int xu2 = xl2 + 1, yu2 = yl2 + 1;
+                    int xu3 = xl3 + 1, yu3 = yl3 + 1;
                     auto clamp = [&](int& u, int lo, int hi) { if (u < lo) u = lo; if (u > hi) u = hi; };
                     if (border_mode == BORDER_MODE_REPLICATE) {
                         clamp(xl0, 0, width_ - 1); clamp(xl1, 0, width_ - 1);
                         clamp(xl2, 0, width_ - 1); clamp(xl3, 0, width_ - 1);
                         clamp(yl0, 0, height_ - 1); clamp(yl1, 0, height_ - 1);
                         clamp(yl2, 0, height_ - 1); clamp(yl3, 0, height_ - 1);
-                    }
-                    int xu0 = xl0 + 1, yu0 = yl0 + 1;
-                    int xu1 = xl1 + 1, yu1 = yl1 + 1;
-                    int xu2 = xl2 + 1, yu2 = yl2 + 1;
-                    int xu3 = xl3 + 1, yu3 = yl3 + 1;
-                    if (border_mode == BORDER_MODE_REPLICATE) {
-                        if (xu0 >= width_) xu0 = width_ - 1; if (yu0 >= height_) yu0 = height_ - 1;
-                        if (xu1 >= width_) xu1 = width_ - 1; if (yu1 >= height_) yu1 = height_ - 1;
-                        if (xu2 >= width_) xu2 = width_ - 1; if (yu2 >= height_) yu2 = height_ - 1;
-                        if (xu3 >= width_) xu3 = width_ - 1; if (yu3 >= height_) yu3 = height_ - 1;
+                        clamp(xu0, 0, width_ - 1); clamp(xu1, 0, width_ - 1);
+                        clamp(xu2, 0, width_ - 1); clamp(xu3, 0, width_ - 1);
+                        clamp(yu0, 0, height_ - 1); clamp(yu1, 0, height_ - 1);
+                        clamp(yu2, 0, height_ - 1); clamp(yu3, 0, height_ - 1);
                     }
                     float tl0, tr0, bl0, br0, tl1, tr1, bl1, br1, tl2, tr2, bl2, br2, tl3, tr3, bl3, br3;
                     if (border_mode == BORDER_MODE_CONSTANT) {
@@ -3168,22 +3447,22 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                     float fx1 = sx1 - xl1, fy1 = sy1 - yl1;
                     float fx2 = sx2 - xl2, fy2 = sy2 - yl2;
                     float fx3 = sx3 - xl3, fy3 = sy3 - yl3;
+                    // Form both taps before clamping: a negative lower tap
+                    // must not move the upper tap one pixel into the image.
+                    int xu0 = xl0 + 1, yu0 = yl0 + 1;
+                    int xu1 = xl1 + 1, yu1 = yl1 + 1;
+                    int xu2 = xl2 + 1, yu2 = yl2 + 1;
+                    int xu3 = xl3 + 1, yu3 = yl3 + 1;
                     auto clamp = [&](int& u, int lo, int hi) { if (u < lo) u = lo; if (u > hi) u = hi; };
                     if (border_mode == BORDER_MODE_REPLICATE) {
                         clamp(xl0, 0, width_ - 1); clamp(xl1, 0, width_ - 1);
                         clamp(xl2, 0, width_ - 1); clamp(xl3, 0, width_ - 1);
                         clamp(yl0, 0, height_ - 1); clamp(yl1, 0, height_ - 1);
                         clamp(yl2, 0, height_ - 1); clamp(yl3, 0, height_ - 1);
-                    }
-                    int xu0 = xl0 + 1, yu0 = yl0 + 1;
-                    int xu1 = xl1 + 1, yu1 = yl1 + 1;
-                    int xu2 = xl2 + 1, yu2 = yl2 + 1;
-                    int xu3 = xl3 + 1, yu3 = yl3 + 1;
-                    if (border_mode == BORDER_MODE_REPLICATE) {
-                        if (xu0 >= width_) xu0 = width_ - 1; if (yu0 >= height_) yu0 = height_ - 1;
-                        if (xu1 >= width_) xu1 = width_ - 1; if (yu1 >= height_) yu1 = height_ - 1;
-                        if (xu2 >= width_) xu2 = width_ - 1; if (yu2 >= height_) yu2 = height_ - 1;
-                        if (xu3 >= width_) xu3 = width_ - 1; if (yu3 >= height_) yu3 = height_ - 1;
+                        clamp(xu0, 0, width_ - 1); clamp(xu1, 0, width_ - 1);
+                        clamp(xu2, 0, width_ - 1); clamp(xu3, 0, width_ - 1);
+                        clamp(yu0, 0, height_ - 1); clamp(yu1, 0, height_ - 1);
+                        clamp(yu2, 0, height_ - 1); clamp(yu3, 0, height_ - 1);
                     }
                     float tl0, tr0, bl0, br0, tl1, tr1, bl1, br1, tl2, tr2, bl2, br2, tl3, tr3, bl3, br3;
                     if (border_mode == BORDER_MODE_CONSTANT) {
@@ -3285,7 +3564,7 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
             if (channels_ == 3 && std::is_same<D, float>::value) {
                 float* out_row = reinterpret_cast<float*>(out_row_any);
                 int x = 0;
-#if defined(__SSE2__)
+#if defined(INSPIRECV_HAVE_SSE2)
                 for (; x + 4 <= width; x += 4) {
                     // lane-wise src coords
                     float sx0 = yb + (x + 0) * a, sy0 = yd + (x + 0) * c;
@@ -3300,22 +3579,22 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                     float fx1 = sx1 - xl1, fy1 = sy1 - yl1;
                     float fx2 = sx2 - xl2, fy2 = sy2 - yl2;
                     float fx3 = sx3 - xl3, fy3 = sy3 - yl3;
+                    // Form both taps before clamping: a negative lower tap
+                    // must not move the upper tap one pixel into the image.
+                    int xu0 = xl0 + 1, yu0 = yl0 + 1;
+                    int xu1 = xl1 + 1, yu1 = yl1 + 1;
+                    int xu2 = xl2 + 1, yu2 = yl2 + 1;
+                    int xu3 = xl3 + 1, yu3 = yl3 + 1;
                     auto clamp = [&](int& u, int lo, int hi) { if (u < lo) u = lo; if (u > hi) u = hi; };
                     if (border_mode == BORDER_MODE_REPLICATE) {
                         clamp(xl0, 0, width_ - 1); clamp(xl1, 0, width_ - 1);
                         clamp(xl2, 0, width_ - 1); clamp(xl3, 0, width_ - 1);
                         clamp(yl0, 0, height_ - 1); clamp(yl1, 0, height_ - 1);
                         clamp(yl2, 0, height_ - 1); clamp(yl3, 0, height_ - 1);
-                    }
-                    int xu0 = xl0 + 1, yu0 = yl0 + 1;
-                    int xu1 = xl1 + 1, yu1 = yl1 + 1;
-                    int xu2 = xl2 + 1, yu2 = yl2 + 1;
-                    int xu3 = xl3 + 1, yu3 = yl3 + 1;
-                    if (border_mode == BORDER_MODE_REPLICATE) {
-                        if (xu0 >= width_) xu0 = width_ - 1; if (yu0 >= height_) yu0 = height_ - 1;
-                        if (xu1 >= width_) xu1 = width_ - 1; if (yu1 >= height_) yu1 = height_ - 1;
-                        if (xu2 >= width_) xu2 = width_ - 1; if (yu2 >= height_) yu2 = height_ - 1;
-                        if (xu3 >= width_) xu3 = width_ - 1; if (yu3 >= height_) yu3 = height_ - 1;
+                        clamp(xu0, 0, width_ - 1); clamp(xu1, 0, width_ - 1);
+                        clamp(xu2, 0, width_ - 1); clamp(xu3, 0, width_ - 1);
+                        clamp(yu0, 0, height_ - 1); clamp(yu1, 0, height_ - 1);
+                        clamp(yu2, 0, height_ - 1); clamp(yu3, 0, height_ - 1);
                     }
                     auto inx = [&](int u){ return u >= 0 && u < width_; };
                     auto iny = [&](int v){ return v >= 0 && v < height_; };
@@ -3375,22 +3654,22 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                     float fx1 = sx1 - xl1, fy1 = sy1 - yl1;
                     float fx2 = sx2 - xl2, fy2 = sy2 - yl2;
                     float fx3 = sx3 - xl3, fy3 = sy3 - yl3;
+                    // Form both taps before clamping: a negative lower tap
+                    // must not move the upper tap one pixel into the image.
+                    int xu0 = xl0 + 1, yu0 = yl0 + 1;
+                    int xu1 = xl1 + 1, yu1 = yl1 + 1;
+                    int xu2 = xl2 + 1, yu2 = yl2 + 1;
+                    int xu3 = xl3 + 1, yu3 = yl3 + 1;
                     auto clamp = [&](int& u, int lo, int hi) { if (u < lo) u = lo; if (u > hi) u = hi; };
                     if (border_mode == BORDER_MODE_REPLICATE) {
                         clamp(xl0, 0, width_ - 1); clamp(xl1, 0, width_ - 1);
                         clamp(xl2, 0, width_ - 1); clamp(xl3, 0, width_ - 1);
                         clamp(yl0, 0, height_ - 1); clamp(yl1, 0, height_ - 1);
                         clamp(yl2, 0, height_ - 1); clamp(yl3, 0, height_ - 1);
-                    }
-                    int xu0 = xl0 + 1, yu0 = yl0 + 1;
-                    int xu1 = xl1 + 1, yu1 = yl1 + 1;
-                    int xu2 = xl2 + 1, yu2 = yl2 + 1;
-                    int xu3 = xl3 + 1, yu3 = yl3 + 1;
-                    if (border_mode == BORDER_MODE_REPLICATE) {
-                        if (xu0 >= width_) xu0 = width_ - 1; if (yu0 >= height_) yu0 = height_ - 1;
-                        if (xu1 >= width_) xu1 = width_ - 1; if (yu1 >= height_) yu1 = height_ - 1;
-                        if (xu2 >= width_) xu2 = width_ - 1; if (yu2 >= height_) yu2 = height_ - 1;
-                        if (xu3 >= width_) xu3 = width_ - 1; if (yu3 >= height_) yu3 = height_ - 1;
+                        clamp(xu0, 0, width_ - 1); clamp(xu1, 0, width_ - 1);
+                        clamp(xu2, 0, width_ - 1); clamp(xu3, 0, width_ - 1);
+                        clamp(yu0, 0, height_ - 1); clamp(yu1, 0, height_ - 1);
+                        clamp(yu2, 0, height_ - 1); clamp(yu3, 0, height_ - 1);
                     }
                     auto inx = [&](int u){ return u >= 0 && u < width_; };
                     auto iny = [&](int v){ return v >= 0 && v < height_; };
@@ -3497,7 +3776,7 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                 uint8_t* out_row = reinterpret_cast<uint8_t*>(out_row_any);
                 int x = 0;
 // SSE2 4-lane u8 (compute in float then pack)
-#if defined(__SSE2__)
+#if defined(INSPIRECV_HAVE_SSE2)
                 for (; x + 4 <= width; x += 4) {
                     float sx0 = yb + (x + 0) * a;
                     float sy0 = yd + (x + 0) * c;
@@ -3515,22 +3794,22 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                     float fx1 = sx1 - xl1, fy1 = sy1 - yl1;
                     float fx2 = sx2 - xl2, fy2 = sy2 - yl2;
                     float fx3 = sx3 - xl3, fy3 = sy3 - yl3;
+                    // Form both taps before clamping: a negative lower tap
+                    // must not move the upper tap one pixel into the image.
+                    int xu0 = xl0 + 1, yu0 = yl0 + 1;
+                    int xu1 = xl1 + 1, yu1 = yl1 + 1;
+                    int xu2 = xl2 + 1, yu2 = yl2 + 1;
+                    int xu3 = xl3 + 1, yu3 = yl3 + 1;
                     auto clamp = [&](int& u, int lo, int hi) { if (u < lo) u = lo; if (u > hi) u = hi; };
                     if (border_mode == BORDER_MODE_REPLICATE) {
                         clamp(xl0, 0, width_ - 1); clamp(xl1, 0, width_ - 1);
                         clamp(xl2, 0, width_ - 1); clamp(xl3, 0, width_ - 1);
                         clamp(yl0, 0, height_ - 1); clamp(yl1, 0, height_ - 1);
                         clamp(yl2, 0, height_ - 1); clamp(yl3, 0, height_ - 1);
-                    }
-                    int xu0 = xl0 + 1, yu0 = yl0 + 1;
-                    int xu1 = xl1 + 1, yu1 = yl1 + 1;
-                    int xu2 = xl2 + 1, yu2 = yl2 + 1;
-                    int xu3 = xl3 + 1, yu3 = yl3 + 1;
-                    if (border_mode == BORDER_MODE_REPLICATE) {
-                        if (xu0 >= width_) xu0 = width_ - 1; if (yu0 >= height_) yu0 = height_ - 1;
-                        if (xu1 >= width_) xu1 = width_ - 1; if (yu1 >= height_) yu1 = height_ - 1;
-                        if (xu2 >= width_) xu2 = width_ - 1; if (yu2 >= height_) yu2 = height_ - 1;
-                        if (xu3 >= width_) xu3 = width_ - 1; if (yu3 >= height_) yu3 = height_ - 1;
+                        clamp(xu0, 0, width_ - 1); clamp(xu1, 0, width_ - 1);
+                        clamp(xu2, 0, width_ - 1); clamp(xu3, 0, width_ - 1);
+                        clamp(yu0, 0, height_ - 1); clamp(yu1, 0, height_ - 1);
+                        clamp(yu2, 0, height_ - 1); clamp(yu3, 0, height_ - 1);
                     }
                     auto inx = [&](int u){ return u >= 0 && u < width_; };
                     auto iny = [&](int v){ return v >= 0 && v < height_; };
@@ -3567,7 +3846,7 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                     __m128 vtop = _mm_add_ps(vtl, _mm_mul_ps(_mm_sub_ps(vtr, vtl), vfx));
                     __m128 vbot = _mm_add_ps(vbl, _mm_mul_ps(_mm_sub_ps(vbr, vbl), vfx));
                     __m128 vout = _mm_add_ps(vtop, _mm_mul_ps(_mm_sub_ps(vbot, vtop), vfy));
-                    __m128i vi  = _mm_cvtps_epi32(vout);
+                    __m128i vi  = RoundNonnegativeSse2(vout);
                     __m128i vi16 = _mm_packs_epi32(vi, _mm_setzero_si128());
                     __m128i vi8  = _mm_packus_epi16(vi16, _mm_setzero_si128());
                     alignas(16) uint8_t tmpb[16];
@@ -3595,22 +3874,22 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                     float fx1 = sx1 - xl1, fy1 = sy1 - yl1;
                     float fx2 = sx2 - xl2, fy2 = sy2 - yl2;
                     float fx3 = sx3 - xl3, fy3 = sy3 - yl3;
+                    // Form both taps before clamping: a negative lower tap
+                    // must not move the upper tap one pixel into the image.
+                    int xu0 = xl0 + 1, yu0 = yl0 + 1;
+                    int xu1 = xl1 + 1, yu1 = yl1 + 1;
+                    int xu2 = xl2 + 1, yu2 = yl2 + 1;
+                    int xu3 = xl3 + 1, yu3 = yl3 + 1;
                     auto clamp = [&](int& u, int lo, int hi) { if (u < lo) u = lo; if (u > hi) u = hi; };
                     if (border_mode == BORDER_MODE_REPLICATE) {
                         clamp(xl0, 0, width_ - 1); clamp(xl1, 0, width_ - 1);
                         clamp(xl2, 0, width_ - 1); clamp(xl3, 0, width_ - 1);
                         clamp(yl0, 0, height_ - 1); clamp(yl1, 0, height_ - 1);
                         clamp(yl2, 0, height_ - 1); clamp(yl3, 0, height_ - 1);
-                    }
-                    int xu0 = xl0 + 1, yu0 = yl0 + 1;
-                    int xu1 = xl1 + 1, yu1 = yl1 + 1;
-                    int xu2 = xl2 + 1, yu2 = yl2 + 1;
-                    int xu3 = xl3 + 1, yu3 = yl3 + 1;
-                    if (border_mode == BORDER_MODE_REPLICATE) {
-                        if (xu0 >= width_) xu0 = width_ - 1; if (yu0 >= height_) yu0 = height_ - 1;
-                        if (xu1 >= width_) xu1 = width_ - 1; if (yu1 >= height_) yu1 = height_ - 1;
-                        if (xu2 >= width_) xu2 = width_ - 1; if (yu2 >= height_) yu2 = height_ - 1;
-                        if (xu3 >= width_) xu3 = width_ - 1; if (yu3 >= height_) yu3 = height_ - 1;
+                        clamp(xu0, 0, width_ - 1); clamp(xu1, 0, width_ - 1);
+                        clamp(xu2, 0, width_ - 1); clamp(xu3, 0, width_ - 1);
+                        clamp(yu0, 0, height_ - 1); clamp(yu1, 0, height_ - 1);
+                        clamp(yu2, 0, height_ - 1); clamp(yu3, 0, height_ - 1);
                     }
                     auto inx = [&](int u){ return u >= 0 && u < width_; };
                     auto iny = [&](int v){ return v >= 0 && v < height_; };
@@ -3715,7 +3994,7 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
             if (channels_ == 3 && std::is_same<D, uint8_t>::value) {
                 uint8_t* out_row = reinterpret_cast<uint8_t*>(out_row_any);
                 int x = 0;
-#if defined(__SSE2__)
+#if defined(INSPIRECV_HAVE_SSE2)
                 for (; x + 4 <= width; x += 4) {
                     float sx0 = yb + (x + 0) * a, sy0 = yd + (x + 0) * c;
                     float sx1 = yb + (x + 1) * a, sy1 = yd + (x + 1) * c;
@@ -3729,22 +4008,22 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                     float fx1 = sx1 - xl1, fy1 = sy1 - yl1;
                     float fx2 = sx2 - xl2, fy2 = sy2 - yl2;
                     float fx3 = sx3 - xl3, fy3 = sy3 - yl3;
+                    // Form both taps before clamping: a negative lower tap
+                    // must not move the upper tap one pixel into the image.
+                    int xu0 = xl0 + 1, yu0 = yl0 + 1;
+                    int xu1 = xl1 + 1, yu1 = yl1 + 1;
+                    int xu2 = xl2 + 1, yu2 = yl2 + 1;
+                    int xu3 = xl3 + 1, yu3 = yl3 + 1;
                     auto clamp = [&](int& u, int lo, int hi) { if (u < lo) u = lo; if (u > hi) u = hi; };
                     if (border_mode == BORDER_MODE_REPLICATE) {
                         clamp(xl0, 0, width_ - 1); clamp(xl1, 0, width_ - 1);
                         clamp(xl2, 0, width_ - 1); clamp(xl3, 0, width_ - 1);
                         clamp(yl0, 0, height_ - 1); clamp(yl1, 0, height_ - 1);
                         clamp(yl2, 0, height_ - 1); clamp(yl3, 0, height_ - 1);
-                    }
-                    int xu0 = xl0 + 1, yu0 = yl0 + 1;
-                    int xu1 = xl1 + 1, yu1 = yl1 + 1;
-                    int xu2 = xl2 + 1, yu2 = yl2 + 1;
-                    int xu3 = xl3 + 1, yu3 = yl3 + 1;
-                    if (border_mode == BORDER_MODE_REPLICATE) {
-                        if (xu0 >= width_) xu0 = width_ - 1; if (yu0 >= height_) yu0 = height_ - 1;
-                        if (xu1 >= width_) xu1 = width_ - 1; if (yu1 >= height_) yu1 = height_ - 1;
-                        if (xu2 >= width_) xu2 = width_ - 1; if (yu2 >= height_) yu2 = height_ - 1;
-                        if (xu3 >= width_) xu3 = width_ - 1; if (yu3 >= height_) yu3 = height_ - 1;
+                        clamp(xu0, 0, width_ - 1); clamp(xu1, 0, width_ - 1);
+                        clamp(xu2, 0, width_ - 1); clamp(xu3, 0, width_ - 1);
+                        clamp(yu0, 0, height_ - 1); clamp(yu1, 0, height_ - 1);
+                        clamp(yu2, 0, height_ - 1); clamp(yu3, 0, height_ - 1);
                     }
                     auto inx = [&](int u){ return u >= 0 && u < width_; };
                     auto iny = [&](int v){ return v >= 0 && v < height_; };
@@ -3805,22 +4084,22 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
                     float fx1 = sx1 - xl1, fy1 = sy1 - yl1;
                     float fx2 = sx2 - xl2, fy2 = sy2 - yl2;
                     float fx3 = sx3 - xl3, fy3 = sy3 - yl3;
+                    // Form both taps before clamping: a negative lower tap
+                    // must not move the upper tap one pixel into the image.
+                    int xu0 = xl0 + 1, yu0 = yl0 + 1;
+                    int xu1 = xl1 + 1, yu1 = yl1 + 1;
+                    int xu2 = xl2 + 1, yu2 = yl2 + 1;
+                    int xu3 = xl3 + 1, yu3 = yl3 + 1;
                     auto clamp = [&](int& u, int lo, int hi) { if (u < lo) u = lo; if (u > hi) u = hi; };
                     if (border_mode == BORDER_MODE_REPLICATE) {
                         clamp(xl0, 0, width_ - 1); clamp(xl1, 0, width_ - 1);
                         clamp(xl2, 0, width_ - 1); clamp(xl3, 0, width_ - 1);
                         clamp(yl0, 0, height_ - 1); clamp(yl1, 0, height_ - 1);
                         clamp(yl2, 0, height_ - 1); clamp(yl3, 0, height_ - 1);
-                    }
-                    int xu0 = xl0 + 1, yu0 = yl0 + 1;
-                    int xu1 = xl1 + 1, yu1 = yl1 + 1;
-                    int xu2 = xl2 + 1, yu2 = yl2 + 1;
-                    int xu3 = xl3 + 1, yu3 = yl3 + 1;
-                    if (border_mode == BORDER_MODE_REPLICATE) {
-                        if (xu0 >= width_) xu0 = width_ - 1; if (yu0 >= height_) yu0 = height_ - 1;
-                        if (xu1 >= width_) xu1 = width_ - 1; if (yu1 >= height_) yu1 = height_ - 1;
-                        if (xu2 >= width_) xu2 = width_ - 1; if (yu2 >= height_) yu2 = height_ - 1;
-                        if (xu3 >= width_) xu3 = width_ - 1; if (yu3 >= height_) yu3 = height_ - 1;
+                        clamp(xu0, 0, width_ - 1); clamp(xu1, 0, width_ - 1);
+                        clamp(xu2, 0, width_ - 1); clamp(xu3, 0, width_ - 1);
+                        clamp(yu0, 0, height_ - 1); clamp(yu1, 0, height_ - 1);
+                        clamp(yu2, 0, height_ - 1); clamp(yu3, 0, height_ - 1);
                     }
                     auto inx = [&](int u){ return u >= 0 && u < width_; };
                     auto iny = [&](int v){ return v >= 0 && v < height_; };
@@ -3965,11 +4244,10 @@ Bitmap<D> Bitmap<D>::AffineBilinearOptimized(int width, int height, const Transf
 }
 template <typename D>
 Bitmap<D> Bitmap<D>::Pad(int top, int down, int left, int right, D value) const {
+    const auto size = CheckedPaddedSize(width_, height_, channels_, top, down, left, right);
     Bitmap<D> dst;
-    dst.width_ = width_ + left + right;
-    dst.height_ = height_ + top + down;
-    dst.channels_ = channels_;
-    dst.data_.reset(new D[static_cast<size_t>(dst.width_) * dst.height_ * channels_]);
+    dst.Reset(size.first, size.second, channels_);
+    if (dst.Empty()) return dst;
     const int destination_width = dst.width_;
     const int channel_count = channels_;
     for (int y = 0; y < top; ++y) {
@@ -4004,11 +4282,10 @@ Bitmap<D> Bitmap<D>::PadChannels(int top, int down, int left, int right,
     }
     if (uniform) return Pad(top, down, left, right, first);
 
+    const auto size = CheckedPaddedSize(width_, height_, channels_, top, down, left, right);
     Bitmap<D> dst;
-    dst.width_ = width_ + left + right;
-    dst.height_ = height_ + top + down;
-    dst.channels_ = channels_;
-    dst.data_.reset(new D[static_cast<size_t>(dst.width_) * dst.height_ * channels_]);
+    dst.Reset(size.first, size.second, channels_);
+    if (dst.Empty()) return dst;
     const int dst_w = dst.width_;
     const int dst_h = dst.height_;
     const int C = channels_;
@@ -4265,6 +4542,16 @@ Bitmap<D> Bitmap<D>::GaussianBlur(int ksize, float sigmaX) const {
     unsigned int hw = std::thread::hardware_concurrency();
     if (hw == 0) hw = 4;
     unsigned int numWorkers = std::min<unsigned int>(hw, static_cast<unsigned int>(height_));
+#if defined(INSPIRECV_HAVE_IMAGE_AVX2_KERNELS)
+    const bool use_avx2 = inspirecv::cpu::HasAvx2() &&
+                          (channels_ == 1 || channels_ == 3) && (ksize == 3 || ksize == 5);
+    if (use_avx2) {
+        // Spawning two complete worker groups costs more than small face crops.
+        const std::size_t work = static_cast<std::size_t>(width_) * height_ * channels_;
+        const unsigned int useful_workers = static_cast<unsigned int>(std::max<std::size_t>(1, work / 65536));
+        numWorkers = std::min(numWorkers, useful_workers);
+    }
+#endif
     auto parallelForRows = [&](int rows, const std::function<void(int,int)> &fn) {
         if (numWorkers <= 1 || rows < 2) {
             fn(0, rows);
@@ -4286,6 +4573,18 @@ Bitmap<D> Bitmap<D>::GaussianBlur(int ksize, float sigmaX) const {
     parallelForRows(height_, [&](int yBegin, int yEnd) {
         for (int y = yBegin; y < yEnd; ++y) {
             const D* rowPtr = Row(y);
+#if defined(INSPIRECV_HAVE_IMAGE_AVX2_KERNELS)
+            if (use_avx2) {
+                float* out = tmp.data() + static_cast<std::size_t>(y) * width_ * channels_;
+                if (std::is_same<D, uint8_t>::value)
+                    x86::GaussianHorizontalU8Avx2(reinterpret_cast<const uint8_t*>(rowPtr),
+                      out, width_, channels_, kernel.data(), ksize);
+                else
+                    x86::GaussianHorizontalF32Avx2(reinterpret_cast<const float*>(rowPtr),
+                      out, width_, channels_, kernel.data(), ksize);
+                continue;
+            }
+#endif
             // Fast path: single-channel + small kernels (3 or 5) with SIMD
             if (channels_ == 1 && (ksize == 3 || ksize == 5)) {
                 const float w0 = kernel[0];
@@ -4353,7 +4652,7 @@ Bitmap<D> Bitmap<D>::GaussianBlur(int ksize, float sigmaX) const {
                             acc = _mm256_add_ps(acc, _mm256_mul_ps(r, vw2));
                             _mm256_storeu_ps(tmpRow + x, acc);
                         }
-#elif defined(__SSE2__)
+#elif defined(INSPIRECV_HAVE_SSE2)
                         __m128 vw0 = _mm_set1_ps(w0);
                         __m128 vw1 = _mm_set1_ps(w1);
                         __m128 vw2 = _mm_set1_ps(w2);
@@ -4416,7 +4715,7 @@ Bitmap<D> Bitmap<D>::GaussianBlur(int ksize, float sigmaX) const {
                             acc = _mm256_fmadd_ps(e, vw4, acc);
                             _mm256_storeu_ps(tmpRow + x, acc);
                         }
-#elif defined(__SSE2__)
+#elif defined(INSPIRECV_HAVE_SSE2)
                         __m128 vw0 = _mm_set1_ps(w0);
                         __m128 vw1 = _mm_set1_ps(w1);
                         __m128 vw2 = _mm_set1_ps(w2);
@@ -4581,7 +4880,7 @@ Bitmap<D> Bitmap<D>::GaussianBlur(int ksize, float sigmaX) const {
                     if (width_ >= 1) {
                         dst[0] = kernel[0] * src[0] + kernel[1] * src[0] + kernel[2] * (width_ > 1 ? src[1] : src[0]);
                     }
-#if defined(__SSE2__)
+#if defined(INSPIRECV_HAVE_SSE2)
                     if (width_ >= 3) {
                         int x = 1;
                         int end = width_ - 1;
@@ -4648,7 +4947,7 @@ Bitmap<D> Bitmap<D>::GaussianBlur(int ksize, float sigmaX) const {
                         float a0 = src[0], a1 = src[1], a2 = (width_ > 2 ? src[2] : a1), a3 = (width_ > 3 ? src[3] : a2);
                         dst[1] = kernel[0] * a0 + kernel[1] * a0 + kernel[2] * a1 + kernel[3] * a2 + kernel[4] * a3;
                     }
-#if defined(__SSE2__)
+#if defined(INSPIRECV_HAVE_SSE2)
                     if (width_ >= 5) {
                         int x = 2;
                         int end = width_ - 3;
@@ -4806,6 +5105,18 @@ Bitmap<D> Bitmap<D>::GaussianBlur(int ksize, float sigmaX) const {
     parallelForRows(height_, [&](int yBegin, int yEnd) {
         for (int y = yBegin; y < yEnd; ++y) {
             const int* yIdx = &vertIndices[static_cast<size_t>(y) * ksize];
+#if defined(INSPIRECV_HAVE_IMAGE_AVX2_KERNELS)
+            if (use_avx2) {
+                D* out = dst_data + static_cast<std::size_t>(y) * width_ * channels_;
+                if (std::is_same<D, uint8_t>::value)
+                    x86::GaussianVerticalU8Avx2(tmp.data(), reinterpret_cast<uint8_t*>(out),
+                      width_, height_, channels_, y, kernel.data(), ksize);
+                else
+                    x86::GaussianVerticalF32Avx2(tmp.data(), reinterpret_cast<float*>(out),
+                      width_, height_, channels_, y, kernel.data(), ksize);
+                continue;
+            }
+#endif
             if (channels_ == 1) {
                 int x = 0;
 #if defined(__AVX2__)
@@ -4832,7 +5143,7 @@ Bitmap<D> Bitmap<D>::GaussianBlur(int ksize, float sigmaX) const {
                         dst_data[baseOut + i] = static_cast<D>(v);
                     }
                 }
-#elif defined(__SSE2__)
+#elif defined(INSPIRECV_HAVE_SSE2)
                 for (; x + 4 <= width_; x += 4) {
                     __m128 acc0 = _mm_setzero_ps();
                     for (int k = 0; k < ksize; ++k) {
@@ -4977,6 +5288,23 @@ Bitmap<D> Bitmap<D>::MinFilter(int kernel_left, int kernel_right, int kernel_top
     INSPIRECV_CHECK(Channels() == 1) << "channels=" << Channels();
     const int W = Width();
     const int H = Height();
+#if defined(INSPIRECV_HAVE_IMAGE_AVX2_KERNELS)
+    if (std::is_same<D, uint8_t>::value && inspirecv::cpu::HasAvx2() &&
+        kernel_left >= 0 && kernel_right >= 0 && kernel_top >= 0 && kernel_bottom >= 0 &&
+        kernel_left + kernel_right < 15 && kernel_top + kernel_bottom < 15) {
+        Bitmap<D> dst;
+        dst.Reset(W, H, 1);
+        // Keep allocation and standard-library helpers in the baseline TU.
+        // The direct 3x3 kernel needs no intermediate image.
+        const bool direct_3x3 = kernel_left == 1 && kernel_right == 1 &&
+                                kernel_top == 1 && kernel_bottom == 1;
+        std::vector<uint8_t> scratch(direct_3x3 ? 0 : static_cast<size_t>(W) * H);
+        x86::MorphologyU8Avx2(reinterpret_cast<const uint8_t*>(Data()),
+                              reinterpret_cast<uint8_t*>(dst.Data()), W, H,
+                              kernel_left, kernel_right, kernel_top, kernel_bottom, true, scratch.data());
+        return dst;
+    }
+#endif
     // Fast path: 3x3 erode (u8 single-channel)
     if (std::is_same<D, uint8_t>::value &&
         kernel_left == 1 && kernel_right == 1 && kernel_top == 1 && kernel_bottom == 1) {
@@ -5022,6 +5350,26 @@ Bitmap<D> Bitmap<D>::MinFilter(int kernel_left, int kernel_right, int kernel_top
 
                 __m256i vmin = _mm256_min_epu8(_mm256_min_epu8(h0, h1), h2);
                 _mm256_storeu_si256(reinterpret_cast<__m256i*>(out + y * W + x), vmin);
+            }
+#elif defined(INSPIRECV_HAVE_SSE2)
+            for (; x + 16 <= W - 1; x += 16) {
+                __m128i r0_l = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r0 + x - 1));
+                __m128i r0_c = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r0 + x));
+                __m128i r0_r = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r0 + x + 1));
+                __m128i h0 = _mm_min_epu8(_mm_min_epu8(r0_l, r0_c), r0_r);
+
+                __m128i r1_l = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r1 + x - 1));
+                __m128i r1_c = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r1 + x));
+                __m128i r1_r = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r1 + x + 1));
+                __m128i h1 = _mm_min_epu8(_mm_min_epu8(r1_l, r1_c), r1_r);
+
+                __m128i r2_l = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r2 + x - 1));
+                __m128i r2_c = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r2 + x));
+                __m128i r2_r = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r2 + x + 1));
+                __m128i h2 = _mm_min_epu8(_mm_min_epu8(r2_l, r2_c), r2_r);
+
+                __m128i vmin = _mm_min_epu8(_mm_min_epu8(h0, h1), h2);
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(out + y * W + x), vmin);
             }
 #elif (defined(__ARM_NEON) || defined(__ARM_NEON__))
             {
@@ -5149,7 +5497,7 @@ Bitmap<D> Bitmap<D>::MinFilter(int kernel_left, int kernel_right, int kernel_top
                 }
             }
 #endif
-#if defined(__SSE2__)
+#if defined(INSPIRECV_HAVE_SSE2)
             if (std::is_same<D, uint8_t>::value) {
                 for (; x + 16 <= W; x += 16) {
                     __m128i a = _mm_loadu_si128(reinterpret_cast<const __m128i*>(left_trailing.data() + x));
@@ -5225,6 +5573,23 @@ Bitmap<D> Bitmap<D>::MaxFilter(int kernel_left, int kernel_right, int kernel_top
     INSPIRECV_CHECK(Channels() == 1) << "channels=" << Channels();
     const int W = Width();
     const int H = Height();
+#if defined(INSPIRECV_HAVE_IMAGE_AVX2_KERNELS)
+    if (std::is_same<D, uint8_t>::value && inspirecv::cpu::HasAvx2() &&
+        kernel_left >= 0 && kernel_right >= 0 && kernel_top >= 0 && kernel_bottom >= 0 &&
+        kernel_left + kernel_right < 15 && kernel_top + kernel_bottom < 15) {
+        Bitmap<D> dst;
+        dst.Reset(W, H, 1);
+        // Keep allocation and standard-library helpers in the baseline TU.
+        // The direct 3x3 kernel needs no intermediate image.
+        const bool direct_3x3 = kernel_left == 1 && kernel_right == 1 &&
+                                kernel_top == 1 && kernel_bottom == 1;
+        std::vector<uint8_t> scratch(direct_3x3 ? 0 : static_cast<size_t>(W) * H);
+        x86::MorphologyU8Avx2(reinterpret_cast<const uint8_t*>(Data()),
+                              reinterpret_cast<uint8_t*>(dst.Data()), W, H,
+                              kernel_left, kernel_right, kernel_top, kernel_bottom, false, scratch.data());
+        return dst;
+    }
+#endif
     // Fast path: 3x3 dilate (u8 single-channel)
     if (std::is_same<D, uint8_t>::value &&
         kernel_left == 1 && kernel_right == 1 && kernel_top == 1 && kernel_bottom == 1) {
@@ -5268,6 +5633,26 @@ Bitmap<D> Bitmap<D>::MaxFilter(int kernel_left, int kernel_right, int kernel_top
 
                 __m256i vmaxv = _mm256_max_epu8(_mm256_max_epu8(h0, h1), h2);
                 _mm256_storeu_si256(reinterpret_cast<__m256i*>(out + y * W + x), vmaxv);
+            }
+#elif defined(INSPIRECV_HAVE_SSE2)
+            for (; x + 16 <= W - 1; x += 16) {
+                __m128i r0_l = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r0 + x - 1));
+                __m128i r0_c = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r0 + x));
+                __m128i r0_r = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r0 + x + 1));
+                __m128i h0 = _mm_max_epu8(_mm_max_epu8(r0_l, r0_c), r0_r);
+
+                __m128i r1_l = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r1 + x - 1));
+                __m128i r1_c = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r1 + x));
+                __m128i r1_r = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r1 + x + 1));
+                __m128i h1 = _mm_max_epu8(_mm_max_epu8(r1_l, r1_c), r1_r);
+
+                __m128i r2_l = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r2 + x - 1));
+                __m128i r2_c = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r2 + x));
+                __m128i r2_r = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r2 + x + 1));
+                __m128i h2 = _mm_max_epu8(_mm_max_epu8(r2_l, r2_c), r2_r);
+
+                __m128i vmaxv = _mm_max_epu8(_mm_max_epu8(h0, h1), h2);
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(out + y * W + x), vmaxv);
             }
 #elif (defined(__ARM_NEON) || defined(__ARM_NEON__))
             for (; x + 16 <= W - 1; x += 16) {
@@ -5378,7 +5763,7 @@ Bitmap<D> Bitmap<D>::MaxFilter(int kernel_left, int kernel_right, int kernel_top
                 }
             }
 #endif
-#if defined(__SSE2__)
+#if defined(INSPIRECV_HAVE_SSE2)
             if (std::is_same<D, uint8_t>::value) {
                 for (; x + 16 <= W; x += 16) {
                     __m128i a = _mm_loadu_si128(reinterpret_cast<const __m128i*>(left_trailing.data() + x));
@@ -5451,6 +5836,21 @@ template <typename D>
 Bitmap<D> Bitmap<D>::FlipLeftRight() const {
     Bitmap<D> dst;
     dst.Reset(width_, height_, channels_);
+#if defined(INSPIRECV_HAVE_IMAGE_AVX2_KERNELS)
+    if (inspirecv::cpu::HasAvx2() &&
+        (channels_ == 1 || channels_ == 4 || (channels_ == 3 && std::is_same<D, float>::value))) {
+        if (std::is_same<D, uint8_t>::value) {
+            x86::FlipU8Avx2(reinterpret_cast<const uint8_t*>(Data()),
+                            reinterpret_cast<uint8_t*>(dst.Data()), width_, height_, channels_, false);
+            return dst;
+        }
+        if (std::is_same<D, float>::value) {
+            x86::FlipF32Avx2(reinterpret_cast<const float*>(Data()),
+                             reinterpret_cast<float*>(dst.Data()), width_, height_, channels_, false);
+            return dst;
+        }
+    }
+#endif
 #if (defined(__ARM_NEON) || defined(__ARM_NEON__)) 
     if (std::is_same<D, uint8_t>::value) {
         const int C = channels_;
@@ -5497,8 +5897,8 @@ Bitmap<D> Bitmap<D>::FlipLeftRight() const {
         return dst;
     }
 #endif
-#if defined(__SSSE3__)
-    if (kX86U8C3KernelsEnabled && std::is_same<D, uint8_t>::value &&
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+    if (kX86U8C3KernelsEnabled && inspirecv::cpu::HasSsse3() && std::is_same<D, uint8_t>::value &&
         channels_ == 3) {
         x86::FlipHorizontalU8C3(
           reinterpret_cast<const uint8_t*>(Data()),
@@ -5580,13 +5980,74 @@ Bitmap<D> Bitmap<D>::FlipChannels() const {
 
 template <typename D>
 Bitmap<D> Bitmap<D>::Rotate180() const {
-    // Fast path: 180° rotation == vertical flip + horizontal flip
-    // Both flips already have optimized implementations (NEON/SIMD).
-    return this->FlipUpDown().FlipLeftRight();
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+    // Preserve the existing NEON implementations on ARM.
+    return FlipUpDown().FlipLeftRight();
+#else
+    Bitmap<D> dst;
+    dst.Reset(width_, height_, channels_);
+#if defined(INSPIRECV_HAVE_IMAGE_AVX2_KERNELS)
+    if (inspirecv::cpu::HasAvx2() &&
+        (channels_ == 1 || channels_ == 4 || (channels_ == 3 && std::is_same<D, float>::value))) {
+        if (std::is_same<D, uint8_t>::value) {
+            x86::FlipU8Avx2(reinterpret_cast<const uint8_t*>(Data()),
+                            reinterpret_cast<uint8_t*>(dst.Data()), width_, height_, channels_, true);
+            return dst;
+        }
+        if (std::is_same<D, float>::value) {
+            x86::FlipF32Avx2(reinterpret_cast<const float*>(Data()),
+                             reinterpret_cast<float*>(dst.Data()), width_, height_, channels_, true);
+            return dst;
+        }
+    }
+#endif
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+    if (kX86U8C3KernelsEnabled && inspirecv::cpu::HasSsse3() && channels_ == 3 && std::is_same<D, uint8_t>::value) {
+        x86::FlipHorizontalU8C3(reinterpret_cast<const uint8_t*>(Data()),
+                                reinterpret_cast<uint8_t*>(dst.Data()), width_, height_, true);
+        return dst;
+    }
+#endif
+    // One destination allocation and one memory pass for every pixel type.
+    const std::size_t pixels = static_cast<std::size_t>(width_) * height_;
+    for (std::size_t i = 0; i < pixels; ++i)
+        std::memcpy(dst.Data() + i * channels_, Data() + (pixels - 1 - i) * channels_,
+                     sizeof(D) * channels_);
+    return dst;
+#endif
 }
 
 template <typename D>
 Bitmap<D> Bitmap<D>::Rotate90() const {
+#if defined(INSPIRECV_HAVE_SSE2)
+    // A float C4 pixel is exactly 16 bytes; copy its bits with unaligned SSE2.
+    if (std::is_same<D, float>::value && channels_ == 4) {
+        Bitmap<D> dst;
+        dst.Reset(height_, width_, channels_);
+        if (width_ <= 0 || height_ <= 0) return dst;
+        const int output_width = height_;
+        const int output_height = width_;
+        const size_t source_stride = static_cast<size_t>(width_) * 4;
+        const size_t output_stride = static_cast<size_t>(height_) * 4;
+        const float* source = reinterpret_cast<const float*>(Data());
+        float* output = reinterpret_cast<float*>(dst.Data());
+        for (int y = 0; y < output_height; ++y) {
+            float* dst_pixel = output + static_cast<size_t>(y) * output_stride;
+            size_t source_offset = static_cast<size_t>(output_width - 1) * source_stride
+                                 + static_cast<size_t>(y) * 4;
+            for (int x = 0; x < output_width; ++x) {
+                const __m128i pixel = _mm_loadu_si128(
+                    reinterpret_cast<const __m128i*>(source + source_offset));
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(dst_pixel), pixel);
+                dst_pixel += 4;
+                // Unsigned wrap after the final pixel is defined; no pointer is
+                // formed from it because the loop terminates immediately.
+                source_offset -= source_stride;
+            }
+        }
+        return dst;
+    }
+#endif
 #if (defined(__ARM_NEON) || defined(__ARM_NEON__))
     // NEON fast paths
     if (channels_ == 1) {
@@ -5654,6 +6115,14 @@ Bitmap<D> Bitmap<D>::Rotate90() const {
                     vst1_u8(reinterpret_cast<uint8_t*>(dst.at(i + 6, j)), o6);
                     vst1_u8(reinterpret_cast<uint8_t*>(dst.at(i + 7, j)), o7);
                 }
+                // Columns outside the full tile still belong to these eight
+                // destination rows; the row-tail loop below cannot reach them.
+                for (; j < Wd; ++j) {
+                    for (int lane = 0; lane < 8; ++lane) {
+                        *reinterpret_cast<uint8_t*>(dst.at(i + lane, j)) =
+                          *reinterpret_cast<const uint8_t*>(at(Hs - 1 - j, i + lane));
+                    }
+                }
             }
             // tails (scalar)
             for (; i < Hd; ++i) {
@@ -5687,8 +6156,8 @@ Bitmap<D> Bitmap<D>::Rotate90() const {
                     float32x4x2_t t0 = vtrnq_f32(a0, a1);
                     float32x4x2_t t1 = vtrnq_f32(a2, a3);
                     float32x4_t s0 = vcombine_f32(vget_low_f32(t0.val[0]), vget_low_f32(t1.val[0]));
-                    float32x4_t s1 = vcombine_f32(vget_high_f32(t0.val[0]), vget_high_f32(t1.val[0]));
-                    float32x4_t s2 = vcombine_f32(vget_low_f32(t0.val[1]), vget_low_f32(t1.val[1]));
+                    float32x4_t s1 = vcombine_f32(vget_low_f32(t0.val[1]), vget_low_f32(t1.val[1]));
+                    float32x4_t s2 = vcombine_f32(vget_high_f32(t0.val[0]), vget_high_f32(t1.val[0]));
                     float32x4_t s3 = vcombine_f32(vget_high_f32(t0.val[1]), vget_high_f32(t1.val[1]));
                     vst1q_f32(reinterpret_cast<float*>(dst.at(i + 0, j)), s0);
                     vst1q_f32(reinterpret_cast<float*>(dst.at(i + 1, j)), s1);
@@ -5821,7 +6290,7 @@ Bitmap<D> Bitmap<D>::Rotate90() const {
         }
     }
 #endif
-#if defined(__SSE2__)
+#if defined(INSPIRECV_HAVE_SSE2)
     // x86 fast path: float single-channel, 4x4 tile transpose + index mapping
     if (std::is_same<D, float>::value && channels_ == 1) {
         Bitmap<D> dst;
@@ -5876,8 +6345,8 @@ Bitmap<D> Bitmap<D>::Rotate90() const {
         return dst;
     }
 #endif
-#if defined(__SSSE3__)
-    if (kX86U8C3KernelsEnabled && channels_ == 3 &&
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+    if (kX86U8C3KernelsEnabled && inspirecv::cpu::HasSsse3() && channels_ == 3 &&
         std::is_same<D, uint8_t>::value) {
         Bitmap<D> dst;
         dst.Reset(height_, width_, channels_);
@@ -6011,8 +6480,8 @@ Bitmap<D> Bitmap<D>::Rotate270() const {
                     float32x4x2_t t0 = vtrnq_f32(a0, a1);
                     float32x4x2_t t1 = vtrnq_f32(a2, a3);
                     float32x4_t s0 = vcombine_f32(vget_low_f32(t0.val[0]), vget_low_f32(t1.val[0]));
-                    float32x4_t s1 = vcombine_f32(vget_high_f32(t0.val[0]), vget_high_f32(t1.val[0]));
-                    float32x4_t s2 = vcombine_f32(vget_low_f32(t0.val[1]), vget_low_f32(t1.val[1]));
+                    float32x4_t s1 = vcombine_f32(vget_low_f32(t0.val[1]), vget_low_f32(t1.val[1]));
+                    float32x4_t s2 = vcombine_f32(vget_high_f32(t0.val[0]), vget_high_f32(t1.val[0]));
                     float32x4_t s3 = vcombine_f32(vget_high_f32(t0.val[1]), vget_high_f32(t1.val[1]));
                     // Store rows using reversed column index (s3..s0) without lane reversal.
                     vst1q_f32(reinterpret_cast<float*>(dst.at(i + 0, j)), s3);
@@ -6145,7 +6614,7 @@ Bitmap<D> Bitmap<D>::Rotate270() const {
         }
     }
 #endif
-#if defined(__SSE2__)
+#if defined(INSPIRECV_HAVE_SSE2)
     // x86 fast path: float single-channel, 4x4 tile transpose + index mapping (90 deg CCW)
     if (std::is_same<D, float>::value && channels_ == 1) {
         Bitmap<D> dst;
@@ -6173,15 +6642,12 @@ Bitmap<D> Bitmap<D>::Rotate270() const {
                 __m128 s2 = _mm_loadu_ps(reinterpret_cast<const float*>(at(r2, c3)));
                 __m128 s3 = _mm_loadu_ps(reinterpret_cast<const float*>(at(r3, c3)));
                 _MM_TRANSPOSE4_PS(s0, s1, s2, s3);
-                const int rev = _MM_SHUFFLE(0, 1, 2, 3); // produce [3,2,1,0]
-                s0 = _mm_shuffle_ps(s0, s0, rev);
-                s1 = _mm_shuffle_ps(s1, s1, rev);
-                s2 = _mm_shuffle_ps(s2, s2, rev);
-                s3 = _mm_shuffle_ps(s3, s3, rev);
-                _mm_storeu_ps(reinterpret_cast<float*>(dst.at(i + 0, j)), s0);
-                _mm_storeu_ps(reinterpret_cast<float*>(dst.at(i + 1, j)), s1);
-                _mm_storeu_ps(reinterpret_cast<float*>(dst.at(i + 2, j)), s2);
-                _mm_storeu_ps(reinterpret_cast<float*>(dst.at(i + 3, j)), s3);
+                // Transposition preserves ascending source rows. Reverse the
+                // four source columns, not the lanes within each column.
+                _mm_storeu_ps(reinterpret_cast<float*>(dst.at(i + 0, j)), s3);
+                _mm_storeu_ps(reinterpret_cast<float*>(dst.at(i + 1, j)), s2);
+                _mm_storeu_ps(reinterpret_cast<float*>(dst.at(i + 2, j)), s1);
+                _mm_storeu_ps(reinterpret_cast<float*>(dst.at(i + 3, j)), s0);
             }
             for (; j < Wd; ++j) {
                 float* d0 = reinterpret_cast<float*>(dst.at(i + 0, j));
@@ -6203,6 +6669,16 @@ Bitmap<D> Bitmap<D>::Rotate270() const {
         return dst;
     }
 #endif
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+    if (kX86U8C3KernelsEnabled && inspirecv::cpu::HasSsse3() && channels_ == 3 &&
+        std::is_same<D, uint8_t>::value) {
+        Bitmap<D> dst;
+        dst.Reset(height_, width_, channels_);
+        x86::Rotate270U8C3(reinterpret_cast<const uint8_t*>(Data()),
+                           reinterpret_cast<uint8_t*>(dst.Data()), width_, height_);
+        return dst;
+    }
+#endif
     // Fallback scalar
     Bitmap<D> dst;
     dst.Reset(height_, width_, channels_);
@@ -6219,6 +6695,21 @@ Bitmap<D> Bitmap<D>::RgbToGray() const {
     Bitmap<D> dst;
     INSPIRECV_CHECK_EQ(channels_, 3);
     dst.Reset(width_, height_, 1);
+#if defined(INSPIRECV_HAVE_IMAGE_AVX2_KERNELS)
+    if (inspirecv::cpu::HasAvx2()) {
+        const std::size_t pixels = static_cast<std::size_t>(width_) * height_;
+        if (std::is_same<D, uint8_t>::value) {
+            x86::GrayU8Avx2(reinterpret_cast<const uint8_t*>(Data()),
+                            reinterpret_cast<uint8_t*>(dst.Data()), pixels);
+            return dst;
+        }
+        if (std::is_same<D, float>::value) {
+            x86::GrayF32Avx2(reinterpret_cast<const float*>(Data()),
+                             reinterpret_cast<float*>(dst.Data()), pixels);
+            return dst;
+        }
+    }
+#endif
 #if defined(__AVX2__)
     // AVX2 fast path for interleaved BGR -> Gray (u8)
     if (std::is_same<D, uint8_t>::value) {
@@ -6401,11 +6892,35 @@ Bitmap<D> Bitmap<D>::RgbToGray() const {
 
 template <typename D>
 Bitmap<D> Bitmap<D>::SwapRB() const {
-    INSPIRECV_CHECK_EQ(channels_, 3);
+    INSPIRECV_CHECK(channels_ == 3 || channels_ == 4);
     Bitmap<D> dst;
     dst.Reset(width_, height_, channels_);
-#if defined(__SSSE3__)
-    if (kX86U8C3KernelsEnabled && std::is_same<D, uint8_t>::value) {
+#if defined(INSPIRECV_HAVE_IMAGE_AVX2_KERNELS)
+    if (inspirecv::cpu::HasAvx2()) {
+        const std::size_t pixels = static_cast<std::size_t>(width_) * height_;
+        if (std::is_same<D, float>::value) {
+            x86::SwapRbF32Avx2(reinterpret_cast<const float*>(Data()),
+                               reinterpret_cast<float*>(dst.Data()), pixels, channels_);
+            return dst;
+        }
+        if (std::is_same<D, uint8_t>::value && channels_ == 4) {
+            x86::SwapRbU8C4Avx2(reinterpret_cast<const uint8_t*>(Data()),
+                                reinterpret_cast<uint8_t*>(dst.Data()), pixels);
+            return dst;
+        }
+    }
+#endif
+    if (channels_ == 4) {
+        const std::size_t pixels = static_cast<std::size_t>(width_) * height_;
+        for (std::size_t i = 0; i < pixels; ++i) {
+            const D* p = Data() + i * 4;
+            D* out = dst.Data() + i * 4;
+            out[0] = p[2]; out[1] = p[1]; out[2] = p[0]; out[3] = p[3];
+        }
+        return dst;
+    }
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+    if (kX86U8C3KernelsEnabled && inspirecv::cpu::HasSsse3() && std::is_same<D, uint8_t>::value) {
         x86::SwapRbU8C3(
           reinterpret_cast<const uint8_t*>(Data()),
           reinterpret_cast<uint8_t*>(dst.Data()), width_, height_);

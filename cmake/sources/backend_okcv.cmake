@@ -13,12 +13,13 @@ set(INSPIRECV_OKCV_SOURCES
 if(ST_TARGET_PROCESSOR MATCHES "^(x86_64|X86_64|AMD64|i686|i386)$")
     set(INSPIRECV_OKCV_X86_SOURCES
         ${OKCV_DIR}/kernels/x86/u8c3_ops.cc)
-    list(APPEND INSPIRECV_OKCV_SOURCES ${INSPIRECV_OKCV_X86_SOURCES})
-    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-        set_property(SOURCE ${INSPIRECV_OKCV_X86_SOURCES} APPEND
-                     PROPERTY COMPILE_OPTIONS -mssse3)
-    elseif(MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 4)
-        set_property(SOURCE ${INSPIRECV_OKCV_X86_SOURCES} APPEND
-                     PROPERTY COMPILE_OPTIONS /arch:SSE2)
-    endif()
+    set(INSPIRECV_OKCV_AVX2_SOURCES
+        ${OKCV_DIR}/kernels/x86/image_ops_avx2.cc
+        ${OKCV_DIR}/kernels/x86/image_affine_avx2.cc)
+    list(APPEND INSPIRECV_OKCV_SOURCES ${INSPIRECV_OKCV_X86_SOURCES}
+                                     ${INSPIRECV_OKCV_AVX2_SOURCES})
+    list(APPEND INSPIRECV_PRIVATE_DEFINITIONS
+         INSPIRECV_HAVE_IMAGE_AVX2_KERNELS)
+    inspirecv_configure_x86_kernels(SSSE3 ${INSPIRECV_OKCV_X86_SOURCES})
+    inspirecv_configure_x86_kernels(AVX2 ${INSPIRECV_OKCV_AVX2_SOURCES})
 endif()

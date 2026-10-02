@@ -270,10 +270,11 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     endif()
     set_property(SOURCE ${INSPIRECV_TASK_FAST_MATH_SOURCES} APPEND
                  PROPERTY COMPILE_OPTIONS ${ST_TASK_FAST_MATH_OPTIONS})
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU" AND
        ST_TARGET_PROCESSOR MATCHES "^(x86_64|X86_64|AMD64|i686|i386)$")
-        # GCC 13 SLP replaces the two scanline divisions with an approximate
-        # reciprocal under fast-math (even 5/5 can become 0x3f7fffff). These
+        # GCC and Clang SLP can replace the two scanline divisions with an
+        # approximate reciprocal under fast-math (even 41/41 can become
+        # 0x3f7fffff). These
         # coordinates are an observable sampling contract, not an approximation.
         set_property(SOURCE ${TASK_DIR}/execution/row_schedule.cc APPEND
                      PROPERTY COMPILE_OPTIONS -fno-unsafe-math-optimizations)
@@ -300,6 +301,16 @@ elseif(MSVC)
                  PROPERTY COMPILE_OPTIONS
                  "$<$<NOT:$<CONFIG:Debug>>:/O2>"
                  "$<$<NOT:$<CONFIG:Debug>>:/fp:fast>")
+    # HSV's historical MSVC fast-math saturation evaluates as numerator / max.
+    # Isolated AVX2 code must select the same arithmetic as its caller; Debug
+    # retains the original precise reciprocal expression instead.
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+        set(INSPIRECV_TASK_MSVC_FAST_HSV "$<NOT:$<CONFIG:Debug>>")
+    else()
+        set(INSPIRECV_TASK_MSVC_FAST_HSV 0)
+    endif()
+    list(APPEND INSPIRECV_PRIVATE_DEFINITIONS
+         "INSPIRECV_TASK_MSVC_FAST_HSV=${INSPIRECV_TASK_MSVC_FAST_HSV}")
     # MSVC's fast reciprocal can turn an exact scanline step (41/41) into
     # 0x3f7fffff; reassociation also changes the frozen rotation/composition
     # rounding. Keep the precise contract local to these translation units.
@@ -314,6 +325,36 @@ elseif(MSVC)
 endif()
 
 set(INSPIRECV_SRC_FILES ${INSPIRECV_SRC_FILES} ${INSPIRECV_TASK_SOURCES})
+
+# ISA implementations must remain separate machine-code objects even when a
+# parent enables LTO or unity builds. Otherwise cross-TU optimization can move
+# unsupported instructions into an unguarded baseline caller.
+function(inspirecv_configure_x86_kernels isa)
+    set(isa_sources ${ARGN})
+    set_source_files_properties(${isa_sources}
+        PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+    if(MSVC)
+        set_property(SOURCE ${isa_sources} APPEND PROPERTY COMPILE_OPTIONS
+                     /GL- /fp:precise)
+        if(isa STREQUAL "AVX2")
+            set_property(SOURCE ${isa_sources} APPEND
+                         PROPERTY COMPILE_OPTIONS /arch:AVX2)
+        elseif(CMAKE_SIZEOF_VOID_P EQUAL 4)
+            set_property(SOURCE ${isa_sources} APPEND
+                         PROPERTY COMPILE_OPTIONS /arch:SSE2)
+        endif()
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        set_property(SOURCE ${isa_sources} APPEND PROPERTY COMPILE_OPTIONS
+                     -fno-lto -fno-fast-math -ffp-contract=off)
+        if(isa STREQUAL "AVX2")
+            set_property(SOURCE ${isa_sources} APPEND
+                         PROPERTY COMPILE_OPTIONS -mavx2)
+        else()
+            set_property(SOURCE ${isa_sources} APPEND
+                         PROPERTY COMPILE_OPTIONS -mssse3)
+        endif()
+    endif()
+endfunction()
 
 # CPU feature paths
 if (ST_TARGET_PROCESSOR MATCHES "^(x86_64|X86_64|AMD64|i686|i386)$")
@@ -334,14 +375,12 @@ if (ST_TARGET_PROCESSOR MATCHES "^(x86_64|X86_64|AMD64|i686|i386)$")
     endif()
     # Keep AVX2 in isolated translation units and dispatch at runtime. This
     # preserves the SSE4.1 baseline when full-project AVX2 is disabled.
-    set(ST_AVX2_SOURCES ${INSPIRECV_TASK_AVX2_SOURCES})
-    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-        set_property(SOURCE ${ST_AVX2_SOURCES} APPEND
-                     PROPERTY COMPILE_OPTIONS -mavx2)
-    elseif (MSVC)
-        set_property(SOURCE ${ST_AVX2_SOURCES} APPEND
-                     PROPERTY COMPILE_OPTIONS /arch:AVX2)
-    endif()
+    list(APPEND INSPIRECV_SRC_FILES ${INSPIRECV_TASK_AVX2_KERNEL_SOURCES})
+    list(APPEND INSPIRECV_PRIVATE_DEFINITIONS
+         INSPIRECV_TASK_HAVE_AVX2_KERNELS)
+    set(ST_AVX2_SOURCES ${INSPIRECV_TASK_AVX2_SOURCES}
+                        ${INSPIRECV_TASK_AVX2_KERNEL_SOURCES})
+    inspirecv_configure_x86_kernels(AVX2 ${ST_AVX2_SOURCES})
     set(ST_HAVE_AVX2 1)
     # Building every source with AVX2 removes the runtime baseline and can make
     # the library unusable on older x86 CPUs (or under Rosetta). Keep it an
@@ -517,6 +556,9 @@ if(INSPIRECV_BUILD_CPU_BENCHMARKS)
     target_include_directories(inspirecv_cpu_benchmark PRIVATE
         ${OpenCV_INCLUDE_DIRS})
     target_link_libraries(inspirecv_cpu_benchmark PRIVATE ${OpenCV_LIBS})
+    add_executable(inspirecv_simd_coverage_benchmark
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/benchmark/simd_coverage_benchmark.cpp)
+    inspirecv_link_consumer(inspirecv_simd_coverage_benchmark)
 endif()
 
 if (INSPIRECV_BUILD_SAMPLE)    
@@ -559,6 +601,7 @@ if (INSPIRECV_BUILD_TESTS)
     target_compile_definitions(inspirecv_tests PRIVATE
         INSPIRECV_TEST_HAVE_SSE=${ST_HAVE_SSE}
         INSPIRECV_TEST_HAVE_AVX2=${ST_HAVE_AVX2}
+        INSPIRECV_TEST_WHOLE_PROJECT_AVX2=$<BOOL:${INSPIRECV_ENABLE_AVX2}>
         INSPIRECV_TEST_HAVE_NEON=${ST_HAVE_NEON}
         INSPIRECV_TEST_BACKEND_OPENCV=$<BOOL:${INSPIRECV_BACKEND_OPENCV}>)
     if(INSPIRECV_ENABLE_CUDA)
@@ -572,6 +615,10 @@ if (INSPIRECV_BUILD_TESTS)
     if(ST_HAVE_NEON)
         target_compile_definitions(inspirecv_tests PRIVATE
                                    INSPIRECV_TASK_USE_NEON)
+    endif()
+    if(DEFINED INSPIRECV_TASK_MSVC_FAST_HSV)
+        target_compile_definitions(inspirecv_tests PRIVATE
+            "INSPIRECV_TASK_MSVC_FAST_HSV=${INSPIRECV_TASK_MSVC_FAST_HSV}")
     endif()
     if(INSPIRECV_BACKEND_OPENCV)
         target_compile_definitions(inspirecv_tests PRIVATE

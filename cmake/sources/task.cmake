@@ -60,7 +60,6 @@ set(INSPIRECV_TASK_GEOMETRY_SOURCES
 )
 
 set(INSPIRECV_TASK_PLATFORM_SOURCES
-    ${TASK_DIR}/platform/cpu_features.cc
     ${TASK_DIR}/platform/avx2_memcpy.cc
 )
 
@@ -97,6 +96,15 @@ set(INSPIRECV_TASK_FAST_MATH_SOURCES
 
 set(INSPIRECV_TASK_AVX2_SOURCES
     ${TASK_DIR}/platform/avx2_memcpy.cc
+)
+
+# Runtime-dispatched implementations, added to the target only on x86. Their
+# headers and callers remain compiled for the normal portable baseline.
+set(INSPIRECV_TASK_AVX2_KERNEL_SOURCES
+    ${TASK_DIR}/kernels/x86/tensor_writers_avx2.cc
+    ${TASK_DIR}/kernels/x86/channel_ops_avx2.cc
+    ${TASK_DIR}/kernels/x86/color_ops_avx2.cc
+    ${TASK_DIR}/kernels/x86/sampling_ops_avx2.cc
 )
 
 set(INSPIRECV_TASK_NEON_SOURCES
